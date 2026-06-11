@@ -1,0 +1,17 @@
+[package]
+name = "rccg-com-bible-lite"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+tauri = { version = "1.5", features = ["shell-open", "window-all"] }
+
+[[bin]]
+name = "rccg-com-bible-lite"
+path = "src/main.rs"

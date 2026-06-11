@@ -1,0 +1,14 @@
+/Users/bawomaleghemi/CascadeProjects/transcriber/target/release/deps/serde-b80982f942423223.d: /Users/bawomaleghemi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/bawomaleghemi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/bawomaleghemi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/bawomaleghemi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/bawomaleghemi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/bawomaleghemi/CascadeProjects/transcriber/target/release/build/serde-995d95f51ad420ba/out/private.rs
+
+/Users/bawomaleghemi/CascadeProjects/transcriber/target/release/deps/libserde-b80982f942423223.rlib: /Users/bawomaleghemi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/bawomaleghemi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/bawomaleghemi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/bawomaleghemi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/bawomaleghemi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/bawomaleghemi/CascadeProjects/transcriber/target/release/build/serde-995d95f51ad420ba/out/private.rs
+
+/Users/bawomaleghemi/CascadeProjects/transcriber/target/release/deps/libserde-b80982f942423223.rmeta: /Users/bawomaleghemi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/bawomaleghemi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/bawomaleghemi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/bawomaleghemi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/bawomaleghemi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/bawomaleghemi/CascadeProjects/transcriber/target/release/build/serde-995d95f51ad420ba/out/private.rs
+
+/Users/bawomaleghemi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/Users/bawomaleghemi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/Users/bawomaleghemi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/Users/bawomaleghemi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/Users/bawomaleghemi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/Users/bawomaleghemi/CascadeProjects/transcriber/target/release/build/serde-995d95f51ad420ba/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/bawomaleghemi/CascadeProjects/transcriber/target/release/build/serde-995d95f51ad420ba/out

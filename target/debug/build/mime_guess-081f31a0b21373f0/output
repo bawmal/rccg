@@ -1,0 +1,1 @@
+cargo:rustc-env=MIME_TYPES_GENERATED_PATH=/Users/bawomaleghemi/CascadeProjects/transcriber/target/debug/build/mime_guess-081f31a0b21373f0/out/mime_types_generated.rs
