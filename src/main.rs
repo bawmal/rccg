@@ -226,7 +226,7 @@ fn detect_reference(text: String) -> Option<String> {
 fn get_available_monitors(window: Window) -> Vec<String> {
     match window.available_monitors() {
         Ok(monitors) => monitors.iter().enumerate().map(|(i, m)| {
-            let name = m.name().unwrap_or_else(|| format!("Monitor {}", i).into());
+            let name = m.name().cloned().unwrap_or_else(|| format!("Monitor {}", i));
             format!("{}: {}x{}", name, m.size().width, m.size().height)
         }).collect(),
         Err(_) => vec![]

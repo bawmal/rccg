@@ -12,6 +12,13 @@ serde_json = "1"
 regex = "1"
 tauri = { version = "1.5", features = ["shell-open", "window-all"] }
 
+[build-dependencies]
+tauri-build = { version = "1.5", features = [] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
 [[bin]]
 name = "rccg-com-bible-lite"
 path = "src/main.rs"

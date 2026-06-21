@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>RCCG COM Bible-lite</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#09090b;--surface:#111114;--surface2:#18181c;--surface3:#222228;
+  --border:#2a2a32;--primary:#7c6af7;--primary-dim:#3d3580;
+  --text:#e8e8f0;--muted:#68687a;--muted2:#3a3a46;
+  --live:#22c55e;--live-dim:#14532d;--amber:#f59e0b;--red:#ef4444;
+}
+body{font-family:-apple-system,BlinkMacSystemFont,'Inter',sans-serif;background:var(--bg);color:var(--text);height:100vh;display:grid;grid-template-rows:52px 1fr;overflow:hidden}
+
+/* ── Header ── */
+header{background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;padding:0 16px;z-index:10}
+.brand{display:flex;align-items:center;gap:7px;font-weight:700;font-size:14px;letter-spacing:-.3px;color:var(--text)}
+.brand svg{color:var(--primary);flex-shrink:0}
+.pill{display:flex;align-items:center;gap:5px;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid var(--border);background:var(--surface2);color:var(--muted);transition:all .3s;white-space:nowrap}
+.pill.live{border-color:var(--live-dim);background:rgba(34,197,94,.08);color:var(--live)}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--muted);flex-shrink:0}
+.pill.live .dot{background:var(--live);box-shadow:0 0 5px var(--live);animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.sp{flex:1}
+select{background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:4px 9px;font-size:11px;cursor:pointer;outline:none;max-width:180px}
+select:focus{border-color:var(--primary)}
+button{display:flex;align-items:center;gap:4px;padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:11px;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap}
+button:hover{background:var(--surface3)}
+button.primary{background:var(--primary);border-color:var(--primary);color:#fff}
+button.primary:hover{background:#6558e0}
+button:disabled{opacity:.3;cursor:not-allowed;pointer-events:none}
+
+/* ── Main layout ── */
+main{display:grid;grid-template-columns:1fr 320px;min-height:0;overflow:hidden}
+
+/* ── Left: projection area ── */
+#proj-area{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px;position:relative;background:var(--bg);min-height:0}
+#proj-area.has-verse{background:#000}
+.proj-idle{display:flex;flex-direction:column;align-items:center;gap:14px;color:var(--muted2);font-size:13px;text-align:center}
+.proj-idle svg{opacity:.2}
+#proj-card{display:none;flex-direction:column;align-items:center;text-align:center;max-width:800px;width:100%}
+#proj-ref{font-size:16px;font-weight:700;color:rgba(255,255,255,.45);margin-bottom:16px;letter-spacing:.5px;text-transform:uppercase}
+#proj-text{font-size:clamp(20px,3.2vw,42px);line-height:1.6;color:#fff;font-style:italic;font-weight:400}
+#proj-trans{margin-top:14px;font-size:12px;color:rgba(255,255,255,.28);font-weight:700;letter-spacing:1.5px;text-transform:uppercase}
+.proj-actions{position:absolute;bottom:16px;right:16px;display:flex;gap:8px;z-index:10}
+.proj-actions button{font-size:11px;padding:6px 10px}
+#proj-area.has-verse .proj-actions button{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.15);color:rgba(255,255,255,.6)}
+#proj-area.has-verse .proj-actions button:hover{background:rgba(255,255,255,.15)}
+
+/* ── Right sidebar ── */
+aside{background:var(--surface);border-left:1px solid var(--border);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.aside-section{border-bottom:1px solid var(--border);flex-shrink:0}
+.sec-hdr{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);background:var(--surface2)}
+.sec-body{padding:10px 14px}
+.sec-scroll{overflow-y:auto;flex:1;min-height:0;padding:6px}
+
+/* ── Lookup ── */
+.lookup-wrap{position:relative}
+.lookup-row{display:flex;gap:6px}
+.lookup-row input{flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px;font-size:12px;outline:none;font-family:inherit}
+.lookup-row input:focus{border-color:var(--primary)}
+.lookup-hint{font-size:10px;color:var(--muted2);margin-top:6px}
+.autocomplete-list{display:none;position:absolute;top:34px;left:0;right:52px;background:var(--surface);border:1px solid var(--border);border-radius:6px;max-height:180px;overflow:auto;z-index:100;box-shadow:0 8px 20px rgba(0,0,0,.5)}
+.autocomplete-list.on{display:block}
+.autocomplete-item{padding:7px 12px;font-size:12px;cursor:pointer;color:var(--text)}
+.autocomplete-item:hover,.autocomplete-item.active{background:var(--surface3);color:var(--primary)}
+.autocomplete-item .match{color:var(--primary);font-weight:700}
+
+/* ── Detection cards ── */
+.det-card{padding:8px 10px;border:1px solid var(--border);border-radius:6px;margin-bottom:4px;cursor:pointer;font-size:11px;transition:all .15s}
+.det-card:hover{border-color:var(--primary-dim);background:var(--surface2)}
+.det-card.active{border-color:var(--primary);background:rgba(124,106,247,.06)}
+.det-ref{font-weight:700;margin-bottom:3px;display:flex;align-items:center;gap:6px;font-size:12px}
+.det-txt{color:var(--muted);line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.det-meta{margin-top:4px;display:flex;gap:10px;font-size:9px;text-transform:uppercase;letter-spacing:.4px}
+.badge{font-size:8px;padding:1px 5px;border-radius:3px;font-weight:700;text-transform:uppercase;letter-spacing:.5px}
+.badge.direct{background:rgba(34,197,94,.12);color:var(--live)}
+.badge.semantic{background:rgba(245,158,11,.12);color:var(--amber)}
+.badge.manual{background:rgba(124,106,247,.12);color:var(--primary)}
+.conf{color:var(--live)}
+
+/* ── Candidates ── */
+.cand-card{display:flex;align-items:flex-start;gap:8px;padding:8px 10px;cursor:pointer;transition:background .15s}
+.cand-card:hover{background:var(--surface2)}
+.cand-score{flex-shrink:0;font-size:11px;font-weight:700;color:var(--amber);width:32px;text-align:right}
+.cand-ref{font-weight:700;font-size:12px;margin-bottom:2px}
+.cand-txt{font-size:11px;color:var(--muted);line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+
+/* ── Fullscreen overlay ── */
+#fsoverlay{display:none;position:fixed;inset:0;background:#000;z-index:1000;flex-direction:column;align-items:center;justify-content:center;padding:80px;cursor:pointer}
+#fsoverlay.on{display:flex}
+#fs-ref{font-size:18px;font-weight:700;color:rgba(255,255,255,.35);margin-bottom:22px;letter-spacing:.5px;text-transform:uppercase}
+#fs-text{font-size:clamp(26px,4.5vw,58px);line-height:1.55;color:#fff;text-align:center;max-width:1000px;font-style:italic}
+#fs-trans{margin-top:18px;font-size:13px;color:rgba(255,255,255,.25);font-weight:700;letter-spacing:2px;text-transform:uppercase}
+#fs-hint{position:absolute;bottom:22px;font-size:11px;color:rgba(255,255,255,.15)}
+.empty-msg{padding:20px 14px;font-size:12px;color:var(--muted2);text-align:center}
+#toast{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);background:#2a2a36;border:1px solid var(--border);color:var(--text);padding:7px 16px;border-radius:8px;font-size:12px;font-weight:600;z-index:9999;opacity:0;transition:opacity .25s;pointer-events:none}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <div class="brand">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+      <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+      <line x1="12" x2="12" y1="19" y2="22"/>
+    </svg>
+    RCCG COM Bible-lite
+  </div>
+  <div id="pill" class="pill"><span class="dot"></span><span id="ptxt">Connecting...</span></div>
+  <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;white-space:nowrap">
+    Version <select id="tsel" onchange="setTrans(this.value)"><option>KJV</option></select>
+  </label>
+  <div class="sp"></div>
+  <button onclick="clearDisplay()">Clear</button>
+  <button id="fsbtn" class="primary" onclick="openFS()" disabled>&#x26F6; Fullscreen</button>
+</header>
+
+<!-- Main -->
+<main>
+  <!-- Left: live projection -->
+  <div id="proj-area">
+    <div class="proj-idle" id="idle-msg">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+        <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/>
+      </svg>
+      Listening for Bible verses...<br/>
+      <span style="font-size:11px;opacity:.6">Say a verse reference or quote a passage</span>
+    </div>
+    <div id="proj-card">
+      <div id="proj-ref"></div>
+      <div id="proj-text"></div>
+      <div id="proj-trans"></div>
+    </div>
+    <div class="proj-actions">
+      <button onclick="adjacentVerse(-1)" id="prev-btn" disabled>&#8592; Prev Verse</button>
+      <button onclick="adjacentVerse(1)" id="next-btn" disabled>Next Verse &#8594;</button>
+      <button class="primary" id="proj-fs-btn" onclick="openFS()" disabled>&#x26F6; Fullscreen</button>
+    </div>
+  </div>
+
+  <!-- Right: sidebar -->
+  <aside>
+
+    <!-- Manual lookup -->
+    <div class="aside-section">
+      <div class="sec-hdr">Manual Lookup</div>
+      <div class="sec-body">
+        <div class="lookup-wrap">
+          <div class="lookup-row">
+            <input id="ref-input" type="text" placeholder="e.g. John 3:16" autocomplete="off" onkeydown="onRefKey(event)" oninput="onRefInput(this.value)" onblur="setTimeout(()=>hideAC(),150)"/>
+            <button class="primary" onclick="lookupManual()">Go</button>
+          </div>
+          <div id="ac-list" class="autocomplete-list"></div>
+        </div>
+        <div class="lookup-hint">Type reference like <b>John 3:16</b> or <b>1Cor3:16</b></div>
+      </div>
+    </div>
+
+    <!-- Quote Search -->
+    <div class="aside-section">
+      <div class="sec-hdr">Quote Search</div>
+      <div class="sec-body">
+        <textarea id="quote-input" placeholder="Paste or type a verse quote...&#10;e.g. For God so loved the world" rows="3" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px;font-size:12px;resize:vertical;outline:none;font-family:inherit"></textarea>
+        <button class="primary" onclick="searchQuote()" style="margin-top:8px;width:100%;justify-content:center">Search Quote</button>
+        <div class="lookup-hint">Paste any verse text to find it in the Bible</div>
+      </div>
+    </div>
+
+    <!-- Candidates -->
+    <div class="aside-section" id="cands-section" style="display:none">
+      <div class="sec-hdr">
+        Possible Matches
+        <span style="color:var(--amber);font-size:9px">Select to display</span>
+      </div>
+      <div id="cands-list"></div>
+    </div>
+
+    <!-- Detected verse queue -->
+    <div class="aside-section">
+      <div class="sec-hdr">
+        Detected Verses
+        <button style="padding:2px 7px;font-size:10px;border-radius:4px" onclick="clearQueue()">Clear</button>
+      </div>
+      <div class="sec-scroll" id="det-list">
+        <div class="empty-msg" id="det-empty">Detected verses will appear here</div>
+      </div>
+    </div>
+
+  </aside>
+</main>
+
+<!-- Fullscreen overlay -->
+<div id="fsoverlay" onclick="closeFS()">
+  <div id="fs-ref"></div>
+  <div id="fs-text"></div>
+  <div id="fs-trans"></div>
+  <div id="fs-hint">Click to close &nbsp;&#183;&nbsp; F = fullscreen &nbsp;&#183;&nbsp; Arrow keys = navigate</div>
+</div>
+
+<div id="toast"></div>
+<div id="debug" style="position:fixed;bottom:40px;left:14px;background:rgba(0,0,0,.85);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:10px;max-width:400px;max-height:120px;overflow:auto;color:var(--muted);z-index:9998;white-space:pre-wrap;line-height:1.4"></div>
+
+<script>
+'use strict';
+let ws, at='KJV', queue=[], qIdx=-1;
+
+/* ── WebSocket ── */
+function connect(){
+  setS('Connecting...', false);
+  dbg('Connecting to ws://localhost:8765...');
+  ws = new WebSocket('ws://localhost:8765');
+
+  ws.onopen = () => {
+    dbg('WebSocket connected');
+    setS('Live', true);
+  };
+
+  ws.onclose = () => {
+    dbg('WebSocket closed, reconnecting in 2s...');
+    setS('Reconnecting...', false);
+    setTimeout(connect, 2000);
+  };
+
+  ws.onerror = (e) => {
+    dbg('WebSocket error');
+  };
+
+  ws.onmessage = (evt) => {
+    const m = JSON.parse(evt.data);
+    dbg('WS msg: ' + m.type);
+
+    if (m.type === 'init') {
+      at = m.translation || 'KJV';
+      if (m.translations) buildTransSel(m.translations);
+      dbg('Init: translation=' + at);
+    }
+    else if (m.type === 'translation_change') {
+      at = m.translation;
+      document.getElementById('tsel').value = at;
+      toast('Version: ' + at);
+    }
+    else if (m.type === 'verse_detected') {
+      dbg('verse_detected: ' + m.reference + ' trans:' + m.translation);
+      addToQueue(m);
+      displayVerse(m, queue.length - 1);
+      hideCands();
+    }
+    else if (m.type === 'candidates') {
+      showCands(m.candidates);
+    }
+  };
+}
+
+function setS(l, live) {
+  document.getElementById('ptxt').textContent = l;
+  document.getElementById('pill').className = 'pill' + (live ? ' live' : '');
+}
+
+function setTrans(v) {
+  dbg('setTrans: ' + v);
+  if (ws && ws.readyState === 1)
+    ws.send(JSON.stringify({ action: 'set_translation', translation: v }));
+}
+
+function buildTransSel(list){
+  const s=document.getElementById('tsel');s.innerHTML='';
+  list.forEach(t=>{
+    const o=document.createElement('option');
+    o.value=t.abbr;o.textContent=t.abbr+' — '+t.title;
+    if(t.abbr===at)o.selected=true;
+    s.appendChild(o);
+  });
+}
+
+/* ── Display ── */
+function displayVerse(v, idx){
+  dbg('displayVerse: '+v.reference+' trans:'+v.translation);
+  qIdx=idx;
+  document.getElementById('idle-msg').style.display='none';
+  const card=document.getElementById('proj-card');
+  card.style.display='flex';
+  document.getElementById('proj-ref').textContent=v.reference;
+  document.getElementById('proj-text').textContent=v.text;
+  document.getElementById('proj-trans').textContent=v.translation;
+  document.getElementById('proj-area').className='has-verse';
+  document.getElementById('fsbtn').disabled=false;
+  document.getElementById('proj-fs-btn').disabled=false;
+
+  document.querySelectorAll('.det-card').forEach((c,i)=>{
+    c.className='det-card'+(i===idx?' active':'');
+  });
+
+  document.getElementById('prev-btn').disabled=false;
+  document.getElementById('next-btn').disabled=false;
+
+  if(document.getElementById('fsoverlay').classList.contains('on')){
+    document.getElementById('fs-ref').textContent=v.reference;
+    document.getElementById('fs-text').textContent=v.text;
+    document.getElementById('fs-trans').textContent=v.translation;
+  }
+}
+
+function navVerse(dir){
+  const ni=qIdx+dir;
+  if(ni>=0&&ni<queue.length) displayVerse(queue[ni],ni);
+}
+
+/* ── Adjacent verse navigation ── */
+function adjacentVerse(dir){
+  dbg('adjacentVerse('+dir+') qIdx='+qIdx);
+  if(qIdx<0||!queue[qIdx]){dbg('No current verse'); return;}
+  const v=queue[qIdx];
+  let nextCh=v.chapter, nextVs=v.verse+dir;
+  if(nextVs<1){nextCh--; nextVs=150;}
+  if(nextCh<1){dbg('Cannot go before chapter 1'); return;}
+  if(ws&&ws.readyState===1)
+    ws.send(JSON.stringify({action:'lookup',book_name:v.book_name,chapter:nextCh,verse:nextVs}));
+}
+
+/* ── Queue ── */
+function addToQueue(v){
+  queue.push(v);
+  document.getElementById('det-empty')?.remove();
+  const list=document.getElementById('det-list');
+  const idx=queue.length-1;
+  const conf=Math.round((v.confidence||1)*100);
+  const sc=v.source==='direct'?'direct':v.source==='manual'?'manual':'semantic';
+  const d=document.createElement('div');
+  d.className='det-card';
+  d.innerHTML='<div class="det-ref">'+esc(v.reference)
+    +'<span class="badge '+sc+'">'+(v.source||'detected')+'</span></div>'
+    +'<div class="det-txt">'+esc(v.text)+'</div>'
+    +'<div class="det-meta"><span class="conf">'+conf+'% match</span>'
+    +'<span style="color:var(--muted2)">'+v.translation+'</span></div>';
+  d.onclick=()=>displayVerse(v,idx);
+  list.appendChild(d);
+  list.scrollTop=list.scrollHeight;
+}
+
+function clearQueue(){
+  queue=[];qIdx=-1;
+  document.getElementById('det-list').innerHTML='<div class="empty-msg" id="det-empty">Detected verses will appear here</div>';
+  clearDisplay();
+  hideCands();
+}
+
+function clearDisplay(){
+  document.getElementById('proj-area').className='';
+  document.getElementById('idle-msg').style.display='flex';
+  document.getElementById('proj-card').style.display='none';
+  document.getElementById('fsbtn').disabled=true;
+  document.getElementById('proj-fs-btn').disabled=true;
+  document.getElementById('prev-btn').disabled=true;
+  document.getElementById('next-btn').disabled=true;
+  closeFS();
+}
+
+/* ── Candidates ── */
+function showCands(cands){
+  if(!cands||!cands.length)return;
+  const sec=document.getElementById('cands-section');
+  const list=document.getElementById('cands-list');
+  sec.style.display='block';
+  list.innerHTML='';
+  cands.forEach(c=>{
+    const d=document.createElement('div');d.className='cand-card';
+    d.innerHTML='<span class="cand-score">'+Math.round(c.score*100)+'%</span>'
+      +'<div class="cand-ref">'+esc(c.reference)+'</div>'
+      +'<div class="cand-txt">'+esc(c.text)+'</div>';
+    d.onclick=()=>{
+      if(ws&&ws.readyState===1)
+        ws.send(JSON.stringify({action:'select_candidate',book_name:c.book_name,chapter:c.chapter,verse:c.verse}));
+      hideCands();
+    };
+    list.appendChild(d);
+  });
+}
+
+function hideCands(){
+  const sec=document.getElementById('cands-section');
+  if(sec)sec.style.display='none';
+}
+
+/* ── Autocomplete ── */
+const BOOKS=["Genesis","Exodus","Leviticus","Numbers","Deuteronomy","Joshua","Judges","Ruth","1 Samuel","2 Samuel","1 Kings","2 Kings","1 Chronicles","2 Chronicles","Ezra","Nehemiah","Esther","Job","Psalms","Proverbs","Ecclesiastes","Song of Solomon","Isaiah","Jeremiah","Lamentations","Ezekiel","Daniel","Hosea","Joel","Amos","Obadiah","Jonah","Micah","Nahum","Habakkuk","Zephaniah","Haggai","Zechariah","Malachi","Matthew","Mark","Luke","John","Acts","Romans","1 Corinthians","2 Corinthians","Galatians","Ephesians","Philippians","Colossians","1 Thessalonians","2 Thessalonians","1 Timothy","2 Timothy","Titus","Philemon","Hebrews","James","1 Peter","2 Peter","1 John","2 John","3 John","Jude","Revelation"];
+let acIdx=-1,acMatches=[];
+
+function onRefInput(val){
+  const m=val.match(/^([^0-9:]+)/);
+  if(!m){hideAC();return;}
+  const typed=m[1].trim().toLowerCase();
+  if(!typed){hideAC();return;}
+  acMatches=BOOKS.filter(b=>b.toLowerCase().startsWith(typed)||b.toLowerCase().includes(typed)).slice(0,8);
+  renderAC(typed);
+}
+function renderAC(typed){
+  const list=document.getElementById('ac-list');
+  if(!acMatches.length){hideAC();return;}
+  list.innerHTML=acMatches.map((b,i)=>'<div class="autocomplete-item'+(i===acIdx?' active':'')+'" onclick="pickBook(\''+esc(b)+'\')">'+b.replace(new RegExp('('+escRegex(typed)+')','i'),'<span class="match">$1</span>')+'</div>').join('');
+  list.classList.add('on');
+}
+function hideAC(){
+  document.getElementById('ac-list').classList.remove('on');
+  acIdx=-1;acMatches=[];
+}
+function pickBook(book){
+  const inp=document.getElementById('ref-input');
+  const rest=inp.value.replace(/^[^0-9:]+/,'');
+  inp.value=book+(rest?rest:'');
+  hideAC();
+  inp.focus();
+  inp.setSelectionRange(book.length,book.length);
+}
+function onRefKey(e){
+  if(e.key==='Enter'){
+    e.preventDefault();
+    const list=document.getElementById('ac-list');
+    if(list.classList.contains('on')&&acIdx>=0&&acMatches[acIdx]){
+      pickBook(acMatches[acIdx]);
+      return;
+    }
+    lookupManual();
+    return;
+  }
+  const list=document.getElementById('ac-list');
+  if(!list.classList.contains('on'))return;
+  if(e.key==='ArrowDown'){e.preventDefault();acIdx=(acIdx+1)%acMatches.length;renderAC(document.getElementById('ref-input').value.match(/^([^0-9:]+)/)?.[1]||'');}
+  else if(e.key==='ArrowUp'){e.preventDefault();acIdx=(acIdx-1+acMatches.length)%acMatches.length;renderAC(document.getElementById('ref-input').value.match(/^([^0-9:]+)/)?.[1]||'');}
+  else if(e.key==='Tab'){e.preventDefault();if(acIdx>=0&&acMatches[acIdx])pickBook(acMatches[acIdx]);else if(acMatches.length)pickBook(acMatches[0]);}
+  else if(e.key==='Escape'){hideAC();}
+}
+function escRegex(s){return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');}
+
+/* ── Debug ── */
+function dbg(msg){
+  const d=document.getElementById('debug');
+  if(!d)return;
+  d.textContent+='\n'+new Date().toLocaleTimeString()+' '+msg;
+  d.scrollTop=d.scrollHeight;
+  const lines=d.textContent.split('\n');
+  if(lines.length>20)d.textContent=lines.slice(-20).join('\n');
+}
+
+/* ── Quote Search ── */
+function searchQuote(){
+  const text=document.getElementById('quote-input').value.trim();
+  dbg('searchQuote: '+text.slice(0,40)+'...');
+  if(!text){toast('Enter a quote to search');return;}
+  if(ws&&ws.readyState===1)
+    ws.send(JSON.stringify({action:'search_quote',text:text,limit:5}));
+  document.getElementById('quote-input').value='';
+}
+
+/* ── Manual lookup ── */
+function lookupManual(){
+  const raw=document.getElementById('ref-input').value.trim();
+  dbg('lookup: '+raw);
+  if(!raw)return;
+  // Pattern 1: "Book Chapter:Verse" or "Book Chapter Verse" (with space)
+  let m=raw.match(/^([^0-9]+?)\s*(\d+)[:\s]\s*(\d+)$/);
+  // Pattern 2: "Book#:#" no space, e.g. "Exo1:1", "Gen1:1", "1Cor13:4"
+  if(!m) m=raw.match(/^([0-9]?\s*[A-Za-z]+)\s*(\d+)[:\s]\s*(\d+)$/);
+  if(!m){toast('Format: John 3:16 or Exo1:1'); dbg('PARSE FAIL: '+raw); return;}
+  const book=m[1].trim();
+  const ch=parseInt(m[2]);
+  const vs=parseInt(m[3]);
+  dbg('parsed: '+book+' '+ch+':'+vs);
+  toast('Looking up...');
+  if(ws&&ws.readyState===1)
+    ws.send(JSON.stringify({action:'lookup',book_name:book,chapter:ch,verse:vs}));
+  document.getElementById('ref-input').value='';
+}
+
+/* ── Fullscreen ── */
+function openFS(){
+  if(qIdx<0)return;
+  const v=queue[qIdx];
+  document.getElementById('fs-ref').textContent=v.reference;
+  document.getElementById('fs-text').textContent=v.text;
+  document.getElementById('fs-trans').textContent=v.translation;
+  document.getElementById('fsoverlay').classList.add('on');
+}
+function closeFS(){document.getElementById('fsoverlay').classList.remove('on');}
+
+document.addEventListener('keydown',e=>{
+  const ov=document.getElementById('fsoverlay').classList.contains('on');
+  if(e.key==='Escape')closeFS();
+  if(e.key==='f'||e.key==='F'){
+    if(ov) !document.fullscreenElement
+      ?document.getElementById('fsoverlay').requestFullscreen?.()
+      :document.exitFullscreen?.();
+  }
+  if(ov&&e.key==='ArrowRight'){navVerse(1);}
+  if(ov&&e.key==='ArrowLeft'){navVerse(-1);}
+});
+
+/* ── Helpers ── */
+function esc(t){return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+let tt;
+function toast(msg){
+  const t=document.getElementById('toast');t.textContent=msg;t.style.opacity='1';
+  clearTimeout(tt);tt=setTimeout(()=>t.style.opacity='0',2200);
+}
+
+connect();
+</script>
+</body>
+</html>
