@@ -2,7 +2,7 @@
   "build": {
     "beforeBuildCommand": "",
     "beforeDevCommand": "",
-    "devPath": "./web-ui",
+    "devPath": "http://localhost:8080",
     "distDir": "./web-ui"
   },
   "tauri": {
@@ -13,33 +13,7 @@
         "open": true
       },
       "window": {
-        "all": true,
-        "create": true,
-        "center": true,
-        "close": true,
-        "hide": true,
-        "show": true,
-        "maximize": true,
-        "minimize": true,
-        "unmaximize": true,
-        "unminimize": true,
-        "startDragging": true,
-        "setFullscreen": true,
-        "setDecorations": true,
-        "setAlwaysOnTop": true,
-        "setContentProtected": true,
-        "setSize": true,
-        "setMinSize": true,
-        "setMaxSize": true,
-        "setPosition": true,
-        "setResizable": true,
-        "setMaximizable": true,
-        "setMinimizable": true,
-        "setClosable": true,
-        "setTitle": true,
-        "setIcon": true,
-        "print": true,
-        "requestUserAttention": true
+        "all": true
       }
     },
     "bundle": {
@@ -58,19 +32,20 @@
         "icons/icon.ico"
       ],
       "identifier": "org.rccg.com.bible-lite",
-      "longDescription": "RCCG COM Bible-lite - Offline Bible transcription and projection",
+      "longDescription": "RCCG COM Bible-lite - Live Bible verse detection and projection",
       "macOS": {
-        "entitlements": null,
-        "exceptionDomain": "",
+        "entitlements": "entitlements.plist",
+        "exceptionDomain": "localhost",
         "frameworks": [],
         "providerShortName": null,
         "signingIdentity": null
       },
       "resources": [
+        "serve.py",
         "data/**/*",
-        "models/**/*"
+        "web-ui/**/*"
       ],
-      "shortDescription": "Offline Bible transcription app",
+      "shortDescription": "Live Bible verse projection app",
       "targets": "all",
       "windows": {
         "certificateThumbprint": null,
@@ -79,7 +54,7 @@
       }
     },
     "security": {
-      "csp": null
+      "csp": "default-src 'self' http://localhost:8080 ws://localhost:8765; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
     },
     "updater": {
       "active": false
@@ -89,10 +64,11 @@
         "fullscreen": false,
         "height": 800,
         "resizable": true,
-        "title": "RCCG COM Bible-lite - Operator",
-        "width": 1200,
+        "title": "RCCG COM Bible-lite",
+        "width": 1280,
         "center": true,
-        "label": "operator"
+        "label": "operator",
+        "url": "http://localhost:8080"
       }
     ]
   }

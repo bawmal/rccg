@@ -1,1 +1,0 @@
-/Users/bawomaleghemi/CascadeProjects/transcriber/target/debug/transcribe: /Users/bawomaleghemi/CascadeProjects/transcriber/src/simple.rs /Users/bawomaleghemi/CascadeProjects/transcriber/web-ui/index.html

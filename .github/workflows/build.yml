@@ -3,76 +3,105 @@ name: Build RCCG COM Bible-lite
 on:
   push:
     branches: [main]
-  workflow_dispatch:
+    tags:
+      - "v*"          # trigger release on version tags e.g. v1.0.0
+  workflow_dispatch:  # allow manual trigger from GitHub UI
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            label: macOS
+            artifact-name: macos
+            artifact-paths: |
+              target/release/bundle/dmg/*.dmg
+          - platform: windows-latest
+            label: Windows
+            artifact-name: windows
+            artifact-paths: |
+              target/release/bundle/msi/*.msi
+              target/release/bundle/nsis/*.exe
 
-      - name: Install Rust
+    runs-on: ${{ matrix.platform }}
+    name: Build (${{ matrix.label }})
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Download Whisper model
-        shell: powershell
-        run: |
-          New-Item -ItemType Directory -Force -Path models
-          Invoke-WebRequest -Uri "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin" -OutFile "models/ggml-base.en.bin"
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
 
       - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^1"
+        run: cargo install tauri-cli --version "^1" --locked
 
-      - name: Build Tauri app (Windows)
+      - name: Install Python dependencies (websockets)
+        run: pip3 install websockets
+
+      - name: Build Tauri app
         run: cargo tauri build
         env:
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
 
-      - name: Upload Windows installer
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: windows-installer
-          path: |
-            target/release/bundle/msi/*.msi
-            target/release/bundle/nsis/*.exe
+          name: ${{ matrix.artifact-name }}-build
+          path: ${{ matrix.artifact-paths }}
+          if-no-files-found: warn
 
-  build-macos:
-    runs-on: macos-latest
+  # Create a GitHub Release when a version tag is pushed (e.g. git tag v1.0.0 && git push --tags)
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
         with:
-          node-version: 20
+          name: macos-build
+          path: dist/macos
 
-      - name: Download Whisper model
-        run: |
-          mkdir -p models
-          curl -L "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin" -o models/ggml-base.en.bin
-
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^1"
-
-      - name: Build Tauri app (macOS)
-        run: cargo tauri build
-        env:
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-
-      - name: Upload macOS app
-        uses: actions/upload-artifact@v4
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
         with:
-          name: macos-app
-          path: |
-            target/release/bundle/dmg/*.dmg
-            target/release/bundle/macos/*.app
+          name: windows-build
+          path: dist/windows
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: RCCG COM Bible-lite ${{ github.ref_name }}
+          body: |
+            ## RCCG COM Bible-lite ${{ github.ref_name }}
+
+            ### Installation
+            - **macOS**: Download the `.dmg`, open it, drag the app to Applications
+            - **Windows**: Download the `.msi` installer and run it
+
+            ### Requirements
+            - Python 3.8+ must be installed on the target machine
+            - Chrome browser recommended (for Web Speech API microphone access)
+
+            ### What's included
+            - Live Bible verse detection via microphone (Web Speech API)
+            - Manual verse lookup with autocomplete
+            - Approximate scripture quote matching
+            - Fullscreen projection mode
+            - KJV, NIV, and other translations
+          files: |
+            dist/macos/*.dmg
+            dist/windows/*.msi
+            dist/windows/*.exe
+          draft: false
+          prerelease: false
