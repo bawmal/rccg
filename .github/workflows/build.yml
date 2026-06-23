@@ -42,7 +42,27 @@ jobs:
         run: cargo install tauri-cli --version "^1" --locked
 
       - name: Install Python dependencies (websockets)
-        run: pip3 install websockets
+        run: |
+          python3 -m pip install --break-system-packages websockets 2>/dev/null || \
+          python3 -m pip install websockets 2>/dev/null || \
+          pip3 install websockets || true
+        shell: bash
+
+      - name: Ensure data directory exists (DB is distributed separately)
+        run: |
+          mkdir -p data
+          if [ ! -f data/rhema.db ]; then
+            echo "Note: rhema.db not in repo (gitignored). Creating placeholder for build."
+            python3 -c "
+          import sqlite3
+          conn = sqlite3.connect('data/rhema.db')
+          conn.execute('CREATE TABLE IF NOT EXISTS verses (id INTEGER PRIMARY KEY, translation_id INTEGER, book_number INTEGER, book_name TEXT, chapter INTEGER, verse INTEGER, text TEXT)')
+          conn.execute('CREATE TABLE IF NOT EXISTS translations (id INTEGER PRIMARY KEY, abbreviation TEXT, title TEXT, language TEXT, license TEXT, is_copyrighted INTEGER, is_downloaded INTEGER)')
+          conn.commit(); conn.close()
+          print('Placeholder DB created')
+          "
+          fi
+        shell: bash
 
       - name: Build Tauri app
         run: cargo tauri build
