@@ -48,20 +48,11 @@ jobs:
           pip3 install websockets || true
         shell: bash
 
-      - name: Ensure data directory exists (DB is distributed separately)
+      - name: Download rhema.db from data release
         run: |
           mkdir -p data
-          if [ ! -f data/rhema.db ]; then
-            echo "Note: rhema.db not in repo (gitignored). Creating placeholder for build."
-            python3 -c "
-          import sqlite3
-          conn = sqlite3.connect('data/rhema.db')
-          conn.execute('CREATE TABLE IF NOT EXISTS verses (id INTEGER PRIMARY KEY, translation_id INTEGER, book_number INTEGER, book_name TEXT, chapter INTEGER, verse INTEGER, text TEXT)')
-          conn.execute('CREATE TABLE IF NOT EXISTS translations (id INTEGER PRIMARY KEY, abbreviation TEXT, title TEXT, language TEXT, license TEXT, is_copyrighted INTEGER, is_downloaded INTEGER)')
-          conn.commit(); conn.close()
-          print('Placeholder DB created')
-          "
-          fi
+          curl -L -o data/rhema.db \
+            https://github.com/bawmal/rccg/releases/download/data-latest/rhema.db
         shell: bash
 
       - name: Build Tauri app
@@ -98,6 +89,13 @@ jobs:
           name: windows-build
           path: dist/windows
 
+      - name: Collect release files
+        run: |
+          mkdir -p dist/release
+          find dist/macos -type f -name '*.dmg' -exec cp {} dist/release/ \;
+          find dist/windows -type f \( -name '*.msi' -o -name '*.exe' \) -exec cp {} dist/release/ \;
+          ls -la dist/release/
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -119,9 +117,6 @@ jobs:
             - Approximate scripture quote matching
             - Fullscreen projection mode
             - KJV, NIV, and other translations
-          files: |
-            dist/macos/*.dmg
-            dist/windows/*.msi
-            dist/windows/*.exe
+          files: dist/release/*
           draft: false
           prerelease: false
