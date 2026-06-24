@@ -48,11 +48,9 @@ jobs:
           pip3 install websockets || true
         shell: bash
 
-      - name: Download rhema.db from data release
+      - name: Decompress rhema.db
         run: |
-          mkdir -p data
-          curl -L -o data/rhema.db \
-            https://github.com/bawmal/rccg/releases/download/data-latest/rhema.db
+          gzip -d -k data/rhema.db.gz
         shell: bash
 
       - name: Build Tauri app
