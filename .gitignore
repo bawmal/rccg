@@ -4,3 +4,6 @@ data/*.db-wal
 !data/*.db.gz
 models/*.bin
 target/
+pyibuild/
+pyidist/
+binaries/

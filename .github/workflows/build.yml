@@ -41,16 +41,36 @@ jobs:
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^1" --locked
 
-      - name: Install Python dependencies (websockets)
-        run: |
-          python3 -m pip install --break-system-packages websockets 2>/dev/null || \
-          python3 -m pip install websockets 2>/dev/null || \
-          pip3 install websockets || true
-        shell: bash
-
       - name: Decompress rhema.db
         run: |
           gzip -d -k data/rhema.db.gz
+        shell: bash
+
+      - name: Install PyInstaller and dependencies
+        run: |
+          python3 -m pip install --break-system-packages pyinstaller websockets 2>/dev/null || \
+          python3 -m pip install pyinstaller websockets 2>/dev/null || \
+          pip3 install pyinstaller websockets || true
+        shell: bash
+
+      - name: Build server binary with PyInstaller
+        run: |
+          python3 -m PyInstaller serve.spec --distpath pyidist --workpath pyibuild --noconfirm
+        shell: bash
+
+      - name: Stage binary for Tauri externalBin
+        run: |
+          mkdir -p binaries
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            TRIPLE=$(rustc -vV | sed -n 's|host: ||p')
+            cp pyidist/server.exe "binaries/server-${TRIPLE}.exe"
+          else
+            TRIPLE=$(rustc -vV | sed -n 's|host: ||p')
+            cp pyidist/server "binaries/server-${TRIPLE}"
+            chmod +x "binaries/server-${TRIPLE}"
+          fi
+          echo "Staged binary:"
+          ls -la binaries/
         shell: bash
 
       - name: Build Tauri app
@@ -106,8 +126,8 @@ jobs:
             - **Windows**: Download the `.msi` installer and run it
 
             ### Requirements
-            - Python 3.8+ must be installed on the target machine
             - Chrome browser recommended (for Web Speech API microphone access)
+            - No Python installation required — Python is bundled inside the app
 
             ### What's included
             - Live Bible verse detection via microphone (Web Speech API)

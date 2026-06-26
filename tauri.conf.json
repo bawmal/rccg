@@ -23,7 +23,7 @@
       "deb": {
         "depends": []
       },
-      "externalBin": [],
+      "externalBin": ["binaries/server"],
       "icon": [
         "icons/32x32.png",
         "icons/128x128.png",
@@ -40,11 +40,7 @@
         "providerShortName": null,
         "signingIdentity": null
       },
-      "resources": [
-        "serve.py",
-        "data/**/*",
-        "web-ui/**/*"
-      ],
+      "resources": [],
       "shortDescription": "Live Bible verse projection app",
       "targets": "all",
       "windows": {
