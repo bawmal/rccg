@@ -3,6 +3,7 @@ data/*.db-shm
 data/*.db-wal
 !data/*.db.gz
 models/*.bin
+models/vosk-model-*
 target/
 pyibuild/
 pyidist/

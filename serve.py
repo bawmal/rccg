@@ -5,7 +5,7 @@ Serves the web UI + WebSocket for live transcription, manual lookup, and quote s
 Run:  python3 serve.py
 Open:  http://localhost:8080
 """
-import asyncio, json, os, re, signal, sqlite3, subprocess, sys, threading, socket
+import asyncio, json, os, re, signal, sqlite3, subprocess, sys, threading, socket, queue, time
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 
 try:
@@ -15,11 +15,25 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "websockets", "--quiet"])
     import websockets
 
+try:
+    import vosk
+    import sounddevice as sd
+    VOSK_AVAILABLE = True
+except ImportError:
+    VOSK_AVAILABLE = False
+
 DB_PATH   = os.path.join(os.path.dirname(__file__), "data", "rhema.db")
 MODEL     = os.path.join(os.path.dirname(__file__), "models", "ggml-base.en.bin")
+VOSK_MODEL = os.path.join(os.path.dirname(__file__), "models", "vosk-model-small-en-us-0.15")
 WEB_DIR   = os.path.join(os.path.dirname(__file__), "web-ui")
 HTTP_PORT = 8080
 WS_PORT   = 8765
+
+# Vosk speech recognition state
+vosk_running = False
+vosk_listening = False
+vosk_queue = queue.Queue()
+main_loop = None
 
 
 def free_ports():
@@ -63,6 +77,98 @@ def free_ports():
 
 active_translation = "KJV"
 broadcast_clients  = set()
+
+# ─── Vosk speech recognition ─────────────────────────────────────────────────
+
+def start_vosk():
+    global vosk_listening
+    if not VOSK_AVAILABLE:
+        print("[VOSK] vosk/sounddevice not installed")
+        return False
+    if not os.path.exists(VOSK_MODEL):
+        print(f"[VOSK] Model not found: {VOSK_MODEL}")
+        return False
+    vosk_listening = True
+    print("[VOSK] Listening started")
+    return True
+
+def stop_vosk():
+    global vosk_listening
+    vosk_listening = False
+    # drain the audio queue
+    while not vosk_queue.empty():
+        try:
+            vosk_queue.get_nowait()
+        except queue.Empty:
+            break
+    print("[VOSK] Listening stopped")
+
+def vosk_worker():
+    global vosk_running, vosk_listening
+    if not VOSK_AVAILABLE:
+        print("[VOSK] vosk/sounddevice not installed — speech disabled")
+        return
+    if not os.path.exists(VOSK_MODEL):
+        print(f"[VOSK] Model not found: {VOSK_MODEL} — speech disabled")
+        return
+
+    try:
+        model = vosk.Model(VOSK_MODEL)
+    except Exception as e:
+        print(f"[VOSK] Failed to load model: {e}")
+        return
+
+    samplerate = 16000
+    blocksize = 4000
+
+    def audio_callback(indata, frames, time, status):
+        if vosk_listening:
+            vosk_queue.put(bytes(indata))
+
+    try:
+        with sd.RawInputStream(samplerate=samplerate, blocksize=blocksize, dtype='int16',
+                               channels=1, callback=audio_callback):
+            rec = vosk.KaldiRecognizer(model, samplerate)
+            print("[VOSK] Ready")
+            vosk_running = True
+            while vosk_running:
+                if not vosk_listening:
+                    # drain queue while paused
+                    while not vosk_queue.empty():
+                        try:
+                            vosk_queue.get_nowait()
+                        except queue.Empty:
+                            break
+                    time.sleep(0.05)
+                    continue
+
+                try:
+                    data = vosk_queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+
+                if rec.AcceptWaveform(data):
+                    result = json.loads(rec.Result())
+                    text = result.get('text', '').strip()
+                    if text:
+                        print(f"[VOSK] Final: {text}")
+                        if main_loop:
+                            asyncio.run_coroutine_threadsafe(
+                                broadcast(json.dumps({"type": "speech_transcription", "text": text, "final": True})),
+                                main_loop
+                            )
+                else:
+                    partial = json.loads(rec.PartialResult())
+                    text = partial.get('partial', '').strip()
+                    if text:
+                        if main_loop:
+                            asyncio.run_coroutine_threadsafe(
+                                broadcast(json.dumps({"type": "speech_transcription", "text": text, "final": False})),
+                                main_loop
+                            )
+    except Exception as e:
+        print(f"[VOSK] error: {e}")
+        vosk_running = False
 
 # ─── SQLite helpers ──────────────────────────────────────────────────────────
 
@@ -350,6 +456,14 @@ async def handle_client(ws):
                         await broadcast(json.dumps(v))
                     else:
                         print(f"[WS] verse not found: {book} {ch}:{vs}")
+
+            elif action == "start_mic":
+                ok = start_vosk()
+                await broadcast(json.dumps({"type": "mic_status", "listening": ok}))
+
+            elif action == "stop_mic":
+                stop_vosk()
+                await broadcast(json.dumps({"type": "mic_status", "listening": False}))
 
             elif action == "speech_transcription":
                 text = msg.get("text", "").strip()
@@ -749,7 +863,7 @@ async def main():
     print("  RCCG COM Bible-lite — Local Web Server")
     print("=" * 56)
     print(f"  Database: {DB_PATH}")
-    print(f"  Model:    {MODEL} {'(Whisper model found)' if os.path.exists(MODEL) else '(Whisper model not bundled — using browser Web Speech API)'}")
+    print(f"  Model:    {MODEL} {'(Whisper model found)' if os.path.exists(MODEL) else '(Whisper model not bundled — using Vosk offline speech recognition)'}")
     print(f"  Web UI:   http://localhost:{HTTP_PORT}")
     print(f"  WS:       ws://localhost:{WS_PORT}")
     print("=" * 56)
@@ -762,6 +876,14 @@ async def main():
     t.start()
     print(f"[HTTP] Serving on http://localhost:{HTTP_PORT}")
 
+    # Capture the asyncio loop for Vosk to schedule broadcasts from its thread
+    global main_loop
+    main_loop = asyncio.get_running_loop()
+
+    # Start Vosk offline speech recognition worker in a background thread
+    vosk_thread = threading.Thread(target=vosk_worker, daemon=True)
+    vosk_thread.start()
+
     # WebSocket server
     async with websockets.serve(handle_client, "0.0.0.0", WS_PORT, reuse_address=True):
         print(f"[WS]   Listening on ws://localhost:{WS_PORT}")
@@ -769,9 +891,7 @@ async def main():
         print(">>> Open http://localhost:8080 in your browser <<<")
         print()
 
-        # Whisper disabled — using Web Speech API in browser instead
-        # asyncio.create_task(whisper_loop())
-        print("[INFO] Using Web Speech API (browser-native transcription)")
+        print("[INFO] Using Vosk offline speech recognition")
 
         # Run forever
         await asyncio.Future()

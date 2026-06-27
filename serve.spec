@@ -1,15 +1,22 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_all
 block_cipher = None
+
+# Collect all vosk and sounddevice package files (including native DLLs)
+vosk_datas, vosk_binaries, vosk_hiddenimports = collect_all('vosk')
+sd_datas, sd_binaries, sd_hiddenimports = collect_all('sounddevice')
 
 a = Analysis(
     ['serve.py'],
     pathex=['.'],
-    binaries=[],
+    binaries=vosk_binaries + sd_binaries,
     datas=[
         ('web-ui', 'web-ui'),
         ('data/rhema.db', 'data'),
-    ],
-    hiddenimports=['websockets', 'websockets.legacy', 'websockets.legacy.server', 'websockets.legacy.client'],
+        ('models/vosk-model-small-en-us-0.15', 'models/vosk-model-small-en-us-0.15'),
+    ] + vosk_datas + sd_datas,
+    hiddenimports=['websockets', 'websockets.legacy', 'websockets.legacy.server', 'websockets.legacy.client',
+                   'vosk', 'sounddevice', 'cffi'] + vosk_hiddenimports + sd_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

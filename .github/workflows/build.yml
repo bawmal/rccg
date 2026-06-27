@@ -48,9 +48,21 @@ jobs:
 
       - name: Install PyInstaller and dependencies
         run: |
-          python3 -m pip install --break-system-packages pyinstaller websockets 2>/dev/null || \
-          python3 -m pip install pyinstaller websockets 2>/dev/null || \
-          pip3 install pyinstaller websockets || true
+          python3 -m pip install --break-system-packages pyinstaller websockets vosk sounddevice cffi 2>/dev/null || \
+          python3 -m pip install pyinstaller websockets vosk sounddevice cffi 2>/dev/null || \
+          pip3 install pyinstaller websockets vosk sounddevice cffi || true
+        shell: bash
+
+      - name: Download Vosk speech model
+        run: |
+          mkdir -p models
+          if [ ! -d "models/vosk-model-small-en-us-0.15" ]; then
+            echo "Downloading Vosk small English model (~40MB)..."
+            curl -L -o /tmp/vosk-model.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+            unzip -q /tmp/vosk-model.zip -d models/
+            rm /tmp/vosk-model.zip
+          fi
+          ls -la models/
         shell: bash
 
       - name: Build server binary with PyInstaller
@@ -126,11 +138,11 @@ jobs:
             - **Windows**: Download the `.msi` installer and run it
 
             ### Requirements
-            - Chrome browser recommended (for Web Speech API microphone access)
             - No Python installation required — Python is bundled inside the app
+            - No internet connection required — speech recognition runs offline
 
             ### What's included
-            - Live Bible verse detection via microphone (Web Speech API)
+            - Live Bible verse detection via microphone (offline Vosk speech recognition)
             - Manual verse lookup with autocomplete
             - Approximate scripture quote matching
             - Fullscreen projection mode

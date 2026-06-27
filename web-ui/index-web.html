@@ -226,84 +226,30 @@ aside{background:var(--surface);border-left:1px solid var(--border);display:flex
 <script>
 'use strict';
 let ws, at='KJV', queue=[], qIdx=-1;
-let recog=null, micOn=false;
+let micOn=false;
 
-/* ── Web Speech API ── */
-function initSpeech(){
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if(!SpeechRecognition){
-    document.getElementById('mic-btn').disabled=true;
-    document.getElementById('mic-btn').title='Web Speech API not supported in this browser. Use Chrome.';
-    dbg('⚠️ Web Speech API not supported. Use Chrome.');
-    return;
-  }
-  recog = new SpeechRecognition();
-  recog.continuous = true;
-  recog.interimResults = true;
-  recog.lang = 'en-US';
-  recog.maxAlternatives = 1;
-
-  recog.onstart = () => {
-    micOn = true;
-    const btn = document.getElementById('mic-btn');
+/* ── Mic control (backend Vosk offline speech recognition) ── */
+function updateMicButton(listening){
+  micOn = listening;
+  const btn = document.getElementById('mic-btn');
+  const bar = document.getElementById('transcript-bar');
+  if(listening){
     btn.textContent = '🎤 Listening...';
     btn.classList.add('mic-on');
-    dbg('🎤 Mic started — speak now');
     toast('Listening...');
-  };
-
-  recog.onend = () => {
-    if(micOn){
-      // Auto-restart to keep listening continuously
-      try{ recog.start(); } catch(e){}
-    } else {
-      const btn = document.getElementById('mic-btn');
-      btn.textContent = '🎤 Start Mic';
-      btn.classList.remove('mic-on');
-      document.getElementById('transcript-bar').classList.remove('on');
-      dbg('🎤 Mic stopped');
-    }
-  };
-
-  recog.onerror = (e) => {
-    dbg('🎤 Mic error: ' + e.error);
-    if(e.error === 'not-allowed'){
-      toast('Microphone permission denied');
-      micOn = false;
-      document.getElementById('mic-btn').textContent = '🎤 Start Mic';
-      document.getElementById('mic-btn').classList.remove('mic-on');
-    }
-  };
-
-  recog.onresult = (e) => {
-    let interim = '', final = '';
-    for(let i = e.resultIndex; i < e.results.length; i++){
-      const t = e.results[i][0].transcript;
-      if(e.results[i].isFinal) final += t;
-      else interim += t;
-    }
-    const display = final || interim;
-    if(display){
-      const bar = document.getElementById('transcript-bar');
-      bar.textContent = (final ? '✓ ' : '… ') + display;
-      bar.classList.add('on');
-      dbg((final?'Final':'Interim')+': '+display);
-    }
-    if(ws && ws.readyState === 1){
-      if(interim) ws.send(JSON.stringify({action:'speech_transcription', text:interim, final:false}));
-      if(final)   ws.send(JSON.stringify({action:'speech_transcription', text:final,   final:true}));
-    }
-  };
+  } else {
+    btn.textContent = '🎤 Start Mic';
+    btn.classList.remove('mic-on');
+    bar.classList.remove('on');
+  }
 }
 
 function toggleMic(){
-  if(!recog){ toast('Speech not supported — use Chrome'); return; }
+  if(!ws || ws.readyState !== 1){ toast('Not connected'); return; }
   if(micOn){
-    micOn = false;
-    recog.stop();
+    ws.send(JSON.stringify({action:'stop_mic'}));
   } else {
-    micOn = true;
-    recog.start();
+    ws.send(JSON.stringify({action:'start_mic'}));
   }
 }
 
@@ -350,6 +296,17 @@ function connect(){
     }
     else if (m.type === 'candidates') {
       showCands(m.candidates);
+    }
+    else if (m.type === 'mic_status') {
+      updateMicButton(m.listening);
+    }
+    else if (m.type === 'speech_transcription') {
+      const text = m.text || '';
+      const final = m.final || false;
+      const bar = document.getElementById('transcript-bar');
+      bar.textContent = (final ? '✓ ' : '… ') + text;
+      bar.classList.add('on');
+      dbg((final?'Final':'Interim')+': '+text);
     }
     else if (m.type === 'transcription') {
       // Show live transcription in debug
@@ -620,7 +577,6 @@ function toast(msg){
 }
 
 connect();
-initSpeech();
 </script>
 </body>
 </html>
