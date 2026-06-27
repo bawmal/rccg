@@ -5,7 +5,7 @@ Serves the web UI + WebSocket for live transcription, manual lookup, and quote s
 Run:  python3 serve.py
 Open:  http://localhost:8080
 """
-import asyncio, json, os, re, signal, sqlite3, subprocess, sys, threading
+import asyncio, json, os, re, signal, sqlite3, subprocess, sys, threading, socket
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 
 try:
@@ -20,6 +20,46 @@ MODEL     = os.path.join(os.path.dirname(__file__), "models", "ggml-base.en.bin"
 WEB_DIR   = os.path.join(os.path.dirname(__file__), "web-ui")
 HTTP_PORT = 8080
 WS_PORT   = 8765
+
+
+def free_ports():
+    """Kill any process listening on our HTTP/WebSocket ports before we bind."""
+    system = sys.platform
+    for port in (HTTP_PORT, WS_PORT):
+        try:
+            if system.startswith("win"):
+                # Use netstat to find PIDs and taskkill them
+                result = subprocess.run(
+                    ["netstat", "-ano", "|", "findstr", f":{port}"],
+                    capture_output=True, text=True, shell=True
+                )
+                seen_pids = set()
+                for line in result.stdout.splitlines():
+                    parts = line.split()
+                    if len(parts) >= 5:
+                        pid = parts[-1]
+                        if pid.isdigit() and pid not in seen_pids:
+                            seen_pids.add(pid)
+                            try:
+                                subprocess.run(["taskkill", "/F", "/PID", pid], check=False, capture_output=True)
+                                print(f"[cleanup] killed process {pid} on port {port}")
+                            except Exception as e:
+                                print(f"[cleanup] taskkill failed for {pid}: {e}")
+            else:
+                # Unix: lsof -ti :port | xargs kill -9
+                result = subprocess.run(
+                    ["lsof", "-ti", f":{port}"],
+                    capture_output=True, text=True
+                )
+                for pid in result.stdout.strip().split():
+                    try:
+                        os.kill(int(pid), signal.SIGKILL)
+                        print(f"[cleanup] killed process {pid} on port {port}")
+                    except Exception as e:
+                        print(f"[cleanup] kill failed for {pid}: {e}")
+        except Exception as e:
+            print(f"[cleanup] port {port}: {e}")
+
 
 active_translation = "KJV"
 broadcast_clients  = set()
@@ -709,10 +749,13 @@ async def main():
     print("  RCCG COM Bible-lite — Local Web Server")
     print("=" * 56)
     print(f"  Database: {DB_PATH}")
-    print(f"  Model:    {MODEL} {'(found)' if os.path.exists(MODEL) else '(NOT FOUND — audio disabled)'}")
+    print(f"  Model:    {MODEL} {'(Whisper model found)' if os.path.exists(MODEL) else '(Whisper model not bundled — using browser Web Speech API)'}")
     print(f"  Web UI:   http://localhost:{HTTP_PORT}")
     print(f"  WS:       ws://localhost:{WS_PORT}")
     print("=" * 56)
+
+    # Free ports from any previous run
+    free_ports()
 
     # HTTP in background thread
     t = threading.Thread(target=run_http, daemon=True)
@@ -720,7 +763,7 @@ async def main():
     print(f"[HTTP] Serving on http://localhost:{HTTP_PORT}")
 
     # WebSocket server
-    async with websockets.serve(handle_client, "0.0.0.0", WS_PORT):
+    async with websockets.serve(handle_client, "0.0.0.0", WS_PORT, reuse_address=True):
         print(f"[WS]   Listening on ws://localhost:{WS_PORT}")
         print()
         print(">>> Open http://localhost:8080 in your browser <<<")
