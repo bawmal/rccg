@@ -13,7 +13,7 @@ a = Analysis(
     datas=[
         ('web-ui', 'web-ui'),
         ('data/rhema.db', 'data'),
-        ('models/vosk-model-small-en-us-0.15', 'models/vosk-model-small-en-us-0.15'),
+        ('models/vosk-model-en-us-0.22-lgraph', 'models/vosk-model-en-us-0.22-lgraph'),
     ] + vosk_datas + sd_datas,
     hiddenimports=['websockets', 'websockets.legacy', 'websockets.legacy.server', 'websockets.legacy.client',
                    'vosk', 'sounddevice', 'cffi'] + vosk_hiddenimports + sd_hiddenimports,

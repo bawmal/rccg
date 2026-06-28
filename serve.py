@@ -24,7 +24,7 @@ except ImportError:
 
 DB_PATH   = os.path.join(os.path.dirname(__file__), "data", "rhema.db")
 MODEL     = os.path.join(os.path.dirname(__file__), "models", "ggml-base.en.bin")
-VOSK_MODEL = os.path.join(os.path.dirname(__file__), "models", "vosk-model-small-en-us-0.15")
+VOSK_MODEL = os.path.join(os.path.dirname(__file__), "models", "vosk-model-en-us-0.22-lgraph")
 WEB_DIR   = os.path.join(os.path.dirname(__file__), "web-ui")
 HTTP_PORT = 8080
 WS_PORT   = 8765
@@ -169,6 +169,145 @@ def vosk_worker():
     except Exception as e:
         print(f"[VOSK] error: {e}")
         vosk_running = False
+
+# ─── Speech text normalization ───────────────────────────────────────────────
+
+NUMBER_WORDS = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+    "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+    "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+    "hundred": 100,
+}
+
+def _parse_number_words(words):
+    """Parse a sequence of number words into a list of integers.
+
+    Builds valid English numbers greedily from left to right, e.g.:
+      'twenty three' -> [23], 'three sixteen' -> [3, 16],
+      'one hundred twenty three' -> [123].
+    This keeps chapter and verse numbers separate when spoken without a marker.
+    """
+    UNITS = {"one", "two", "three", "four", "five", "six", "seven", "eight", "nine"}
+    TEENS = {"ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+             "sixteen", "seventeen", "eighteen", "nineteen"}
+    TENS = {"twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"}
+    HUNDRED = "hundred"
+
+    numbers = []
+    i = 0
+    while i < len(words):
+        w = words[i]
+        if w in UNITS or w in TEENS:
+            total = NUMBER_WORDS[w]
+            i += 1
+            # Optional: ... hundred [tens [unit]] (e.g. one hundred twenty three)
+            if i < len(words) and words[i] == HUNDRED:
+                total *= 100
+                i += 1
+                if i < len(words) and words[i] in TENS:
+                    total += NUMBER_WORDS[words[i]]
+                    i += 1
+                    if i < len(words) and (words[i] in UNITS or words[i] in TEENS):
+                        total += NUMBER_WORDS[words[i]]
+                        i += 1
+                elif i < len(words) and (words[i] in UNITS or words[i] in TEENS):
+                    total += NUMBER_WORDS[words[i]]
+                    i += 1
+            numbers.append(total)
+        elif w in TENS:
+            total = NUMBER_WORDS[w]
+            i += 1
+            if i < len(words) and (words[i] in UNITS or words[i] in TEENS):
+                total += NUMBER_WORDS[words[i]]
+                i += 1
+            numbers.append(total)
+        elif w == HUNDRED:
+            numbers.append(100)
+            i += 1
+        else:
+            return None
+    return numbers
+
+def _replace_number_word_sequences(text):
+    """Find sequences of number words and replace each with digits."""
+    words = text.split()
+    result = []
+    buffer = []
+    for word in words:
+        clean = re.sub(r'[^a-zA-Z\-]', '', word).lower()
+        if '-' in clean and all(part in NUMBER_WORDS for part in clean.split('-')):
+            # Hyphenated number word (e.g. "twenty-three")
+            buffer.extend(clean.split('-'))
+        elif clean in NUMBER_WORDS:
+            buffer.append(clean)
+        else:
+            if buffer:
+                nums = _parse_number_words(buffer)
+                if nums is not None:
+                    result.extend(str(n) for n in nums)
+                else:
+                    result.extend(buffer)
+                buffer = []
+            result.append(word)
+    if buffer:
+        nums = _parse_number_words(buffer)
+        if nums is not None:
+            result.extend(str(n) for n in nums)
+        else:
+            result.extend(buffer)
+    return ' '.join(result)
+
+def normalize_speech_text(text):
+    """Normalize spoken text so verse detection works with number words and common mishearings."""
+    t = text.lower()
+    # Common book-name / biblical term mishearings from Vosk small model
+    t = re.sub(r'\bjon\b', 'john', t)
+    t = re.sub(r'\bjn\b', 'john', t)
+    t = re.sub(r'\bgen\b', 'genesis', t)
+    t = re.sub(r'\bexo\b', 'exodus', t)
+    t = re.sub(r'\bps\b', 'psalms', t)
+    t = re.sub(r'\bpsalm\b', 'psalms', t)
+    t = re.sub(r'\bprov\b', 'proverbs', t)
+    t = re.sub(r'\beccl\b', 'ecclesiastes', t)
+    t = re.sub(r'\bsos\b', 'song of solomon', t)
+    t = re.sub(r'\bisa\b', 'isaiah', t)
+    t = re.sub(r'\bjer\b', 'jeremiah', t)
+    t = re.sub(r'\blam\b', 'lamentations', t)
+    t = re.sub(r'\bezek\b', 'ezekiel', t)
+    t = re.sub(r'\bdan\b', 'daniel', t)
+    t = re.sub(r'\bhos\b', 'hosea', t)
+    t = re.sub(r'\bjoel\b', 'joel', t)
+    t = re.sub(r'\bamos\b', 'amos', t)
+    t = re.sub(r'\boba\b', 'obadiah', t)
+    t = re.sub(r'\bmic\b', 'micah', t)
+    t = re.sub(r'\bnah\b', 'nahum', t)
+    t = re.sub(r'\bzeph\b', 'zephaniah', t)
+    t = re.sub(r'\bhag\b', 'haggai', t)
+    t = re.sub(r'\bzech\b', 'zechariah', t)
+    t = re.sub(r'\bmal\b', 'malachi', t)
+    t = re.sub(r'\bmatt\b', 'matthew', t)
+    t = re.sub(r'\bmark\b', 'mark', t)
+    t = re.sub(r'\bluke\b', 'luke', t)
+    t = re.sub(r'\bacts\b', 'acts', t)
+    t = re.sub(r'\brom\b', 'romans', t)
+    t = re.sub(r'\b gal\b', ' galatians', t)
+    t = re.sub(r'\beph\b', 'ephesians', t)
+    t = re.sub(r'\bphil\b', 'philippians', t)
+    t = re.sub(r'\bcol\b', 'colossians', t)
+    t = re.sub(r'\bheb\b', 'hebrews', t)
+    t = re.sub(r'\bjas\b', 'james', t)
+    t = re.sub(r'\bjud\b', 'jude', t)
+    t = re.sub(r'\brev\b', 'revelation', t)
+    # Convert spoken reference markers to punctuation before number parsing so
+    # chapter and verse numbers don't combine across the boundary.
+    t = re.sub(r'\bchapter\s+', '', t)
+    t = re.sub(r'\bverse\s+', ': ', t)
+    # Convert spoken number-word sequences to digits (e.g. "twenty three" -> "23")
+    t = _replace_number_word_sequences(t)
+    return t
 
 # ─── SQLite helpers ──────────────────────────────────────────────────────────
 
@@ -471,7 +610,8 @@ async def handle_client(ws):
                 if text:
                     print(f"[SPEECH] {'Final' if final else 'Interim'}: {text}")
                     await broadcast(json.dumps({"type": "transcription", "text": text, "final": final}))
-                    if final and len(text) > 3:
+                    if len(text) > 3:
+                        # Try direct reference detection on both partial and final results
                         ref = detect_verse_ref(text)
                         if ref:
                             book, ch, vs = ref
@@ -482,12 +622,14 @@ async def handle_client(ws):
                                 v["confidence"] = 1.0
                                 print(f"[SPEECH] ✅ Verse: {v['reference']}")
                                 await broadcast(json.dumps(v))
+                        # Try quote matching (lower threshold for partial so user sees candidates quickly)
                         if not ref and len(text) > 10:
                             results = search_quote(conn, text, active_translation, 5)
                             if results:
                                 top = results[0]
-                                if top["score"] >= 0.70:
-                                    # Very high confidence — auto-display
+                                auto_threshold = 0.65 if final else 0.80
+                                if top["score"] >= auto_threshold:
+                                    # High confidence — auto-display
                                     top["type"]       = "verse_detected"
                                     top["source"]     = "quote"
                                     top["confidence"] = top["score"]
@@ -642,11 +784,11 @@ def resolve_book_name(raw):
 
 def detect_verse_ref(text):
     """Detect a Bible verse reference from spoken or typed text."""
-    t = text.lower().strip()
-    # Normalize spoken number words
-    t = re.sub(r'\b(first|one)\b', '1', t)
-    t = re.sub(r'\b(second|two)\b', '2', t)
-    t = re.sub(r'\b(third|three)\b', '3', t)
+    t = normalize_speech_text(text).strip()
+    # Normalize spoken ordinals
+    t = re.sub(r'\bfirst\b', '1', t)
+    t = re.sub(r'\bsecond\b', '2', t)
+    t = re.sub(r'\bthird\b', '3', t)
     # Normalize "chapter X" -> just X, "verse X" -> :X
     t = re.sub(r'\bchapter\s+', '', t)
     t = re.sub(r'\bverse\s+', ':', t)
