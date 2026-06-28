@@ -58,7 +58,15 @@ jobs:
           mkdir -p models
           if [ ! -d "models/vosk-model-small-en-us-0.15" ]; then
             echo "Downloading Vosk small English model (~40MB)..."
-            curl -L -o /tmp/vosk-model.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+            for i in 1 2 3; do
+              curl -L --retry 5 --retry-delay 5 -o /tmp/vosk-model.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip && break
+              echo "Download attempt $i failed, retrying..."
+              sleep 10
+            done
+            if [ ! -f /tmp/vosk-model.zip ]; then
+              echo "ERROR: Failed to download Vosk model"
+              exit 1
+            fi
             unzip -q /tmp/vosk-model.zip -d models/
             rm /tmp/vosk-model.zip
           fi
