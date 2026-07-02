@@ -562,10 +562,12 @@ async def handle_client(ws):
     try:
         # Send init
         trans = get_translations(conn)
+        vosk_available = VOSK_AVAILABLE and os.path.exists(VOSK_MODEL)
         await ws.send(json.dumps({
             "type": "init",
             "translation": active_translation,
             "translations": trans,
+            "vosk_available": vosk_available,
         }))
 
         async for raw in ws:
@@ -597,8 +599,15 @@ async def handle_client(ws):
                         print(f"[WS] verse not found: {book} {ch}:{vs}")
 
             elif action == "start_mic":
-                ok = start_vosk()
-                await broadcast(json.dumps({"type": "mic_status", "listening": ok}))
+                if not (VOSK_AVAILABLE and os.path.exists(VOSK_MODEL)):
+                    await ws.send(json.dumps({
+                        "type": "mic_status",
+                        "listening": False,
+                        "error": "Vosk model is not available in this build. Use Web Speech API or install the offline build."
+                    }))
+                else:
+                    ok = start_vosk()
+                    await broadcast(json.dumps({"type": "mic_status", "listening": ok}))
 
             elif action == "stop_mic":
                 stop_vosk()

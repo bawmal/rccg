@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate"/>
 <title>RCCG COM Bible-lite</title>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -111,6 +112,14 @@ aside{background:var(--surface);border-left:1px solid var(--border);display:flex
 #fs-text{font-size:clamp(26px,4.5vw,58px);line-height:1.55;color:#fff;text-align:center;max-width:1000px;font-style:italic}
 #fs-trans{margin-top:18px;font-size:13px;color:rgba(255,255,255,.25);font-weight:700;letter-spacing:2px;text-transform:uppercase}
 #fs-hint{position:absolute;bottom:22px;font-size:11px;color:rgba(255,255,255,.15)}
+#fsoverlay.on ~ #transcript-bar,
+#fsoverlay.on ~ #debug{
+  display:none !important;
+}
+#fs-controls{position:absolute;bottom:60px;display:flex;gap:12px;z-index:1001}
+#fs-controls button{font-size:13px;padding:8px 16px;background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.15);color:rgba(255,255,255,.7)}
+#fs-controls button:hover{background:rgba(255,255,255,.15)}
+#fs-controls button:disabled{opacity:.3}
 .empty-msg{padding:20px 14px;font-size:12px;color:var(--muted2);text-align:center}
 #toast{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);background:#2a2a36;border:1px solid var(--border);color:var(--text);padding:7px 16px;border-radius:8px;font-size:12px;font-weight:600;z-index:9999;opacity:0;transition:opacity .25s;pointer-events:none}
 </style>
@@ -130,6 +139,12 @@ aside{background:var(--surface);border-left:1px solid var(--border);display:flex
   <div id="pill" class="pill"><span class="dot"></span><span id="ptxt">Connecting...</span></div>
   <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;white-space:nowrap">
     Version <select id="tsel" onchange="setTrans(this.value)"><option>KJV</option></select>
+  </label>
+  <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;white-space:nowrap">
+    Mic <select id="mic-engine" onchange="setSpeechEngine(this.value)">
+      <option value="vosk">Vosk (offline)</option>
+      <option value="web">Web Speech API</option>
+    </select>
   </label>
   <div class="sp"></div>
   <button id="mic-btn" onclick="toggleMic()" style="gap:6px">&#x1F3A4; Start Mic</button>
@@ -216,7 +231,11 @@ aside{background:var(--surface);border-left:1px solid var(--border);display:flex
   <div id="fs-ref"></div>
   <div id="fs-text"></div>
   <div id="fs-trans"></div>
-  <div id="fs-hint">Click to close &nbsp;&#183;&nbsp; F = fullscreen &nbsp;&#183;&nbsp; Arrow keys = navigate</div>
+  <div id="fs-controls">
+    <button onclick="event.stopPropagation(); fsAdjacentVerse(-1)" id="fs-prev" disabled>&#8592; Prev Verse</button>
+    <button onclick="event.stopPropagation(); fsAdjacentVerse(1)" id="fs-next" disabled>Next Verse &#8594;</button>
+  </div>
+  <div id="fs-hint">Click to close &nbsp;&#183;&nbsp; Arrow keys = navigate</div>
 </div>
 
 <div id="transcript-bar"></div>
@@ -227,8 +246,113 @@ aside{background:var(--surface);border-left:1px solid var(--border);display:flex
 'use strict';
 let ws, at='KJV', queue=[], qIdx=-1;
 let micOn=false;
+let speechEngine='vosk';
+let recog=null;
 
-/* ── Mic control (backend Vosk offline speech recognition) ── */
+/* ── Engine selection ── */
+function isTauri(){
+  return !!(window.__TAURI__ || window.__TAURI_INTERNALS__);
+}
+
+function webSpeechSupported(){
+  return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+function loadEnginePref(){
+  const saved = localStorage.getItem('rhema-mic-engine');
+  if(saved && ['vosk','web'].includes(saved)){
+    speechEngine = saved;
+  } else {
+    speechEngine = isTauri() ? 'vosk' : 'web';
+  }
+  const sel = document.getElementById('mic-engine');
+  if(sel){
+    sel.value = speechEngine;
+    const webOpt = sel.querySelector('option[value="web"]');
+    if(webOpt) webOpt.disabled = !webSpeechSupported();
+  }
+  dbg('Mic engine: ' + speechEngine + (isTauri() ? ' (Tauri)' : ' (browser)'));
+}
+
+function setSpeechEngine(v){
+  if(v === speechEngine) return;
+  if(micOn){
+    if(speechEngine === 'web' && recog){
+      try{ recog.stop(); }catch(e){}
+      micOn = false;
+      updateMicButton(false);
+    } else if(speechEngine === 'vosk'){
+      ws.send(JSON.stringify({action:'stop_mic'}));
+    }
+  }
+  speechEngine = v;
+  localStorage.setItem('rhema-mic-engine', v);
+  dbg('Switched mic engine to ' + v);
+  toast('Mic: ' + (v === 'web' ? 'Web Speech API' : 'Vosk offline'));
+}
+
+/* ── Web Speech API (browser native) ── */
+function initWebSpeech(){
+  if(!webSpeechSupported()){
+    dbg('Web Speech API not supported');
+    return false;
+  }
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  recog = new SpeechRecognition();
+  recog.continuous = true;
+  recog.interimResults = true;
+  recog.lang = 'en-US';
+
+  recog.onstart = () => {
+    micOn = true;
+    updateMicButton(true);
+  };
+
+  recog.onend = () => {
+    if(micOn){
+      // Auto-restart if still supposed to be listening
+      try{ recog.start(); }catch(e){}
+    } else {
+      updateMicButton(false);
+    }
+  };
+
+  recog.onerror = (e) => {
+    dbg('Web Speech error: ' + e.error);
+    if(e.error === 'not-allowed' || e.error === 'network' || e.error === 'service-not-allowed'){
+      micOn = false;
+      updateMicButton(false);
+      toast('Web Speech error: ' + e.error);
+    }
+  };
+
+  recog.onresult = (e) => {
+    let interim = '', final = '';
+    for(let i = e.resultIndex; i < e.results.length; i++){
+      const txt = e.results[i][0].transcript;
+      if(e.results[i].isFinal) final += txt + ' ';
+      else interim += txt;
+    }
+    const bar = document.getElementById('transcript-bar');
+    if(final.trim()){
+      bar.textContent = '✓ ' + final.trim();
+      bar.classList.add('on');
+      if(ws && ws.readyState === 1){
+        ws.send(JSON.stringify({action: 'speech_transcription', text: final.trim(), final: true}));
+      }
+    }
+    if(interim.trim()){
+      bar.textContent = '… ' + interim.trim();
+      bar.classList.add('on');
+      if(ws && ws.readyState === 1){
+        ws.send(JSON.stringify({action: 'speech_transcription', text: interim.trim(), final: false}));
+      }
+    }
+  };
+  return true;
+}
+
+/* ── Mic control (Vosk or Web Speech API) ── */
 function updateMicButton(listening){
   micOn = listening;
   const btn = document.getElementById('mic-btn');
@@ -247,9 +371,27 @@ function updateMicButton(listening){
 function toggleMic(){
   if(!ws || ws.readyState !== 1){ toast('Not connected'); return; }
   if(micOn){
-    ws.send(JSON.stringify({action:'stop_mic'}));
+    if(speechEngine === 'web' && recog){
+      try{ recog.stop(); }catch(e){}
+      micOn = false;
+      updateMicButton(false);
+    } else {
+      ws.send(JSON.stringify({action:'stop_mic'}));
+    }
   } else {
-    ws.send(JSON.stringify({action:'start_mic'}));
+    if(speechEngine === 'web'){
+      if(!recog && !initWebSpeech()){
+        toast('Web Speech API not supported in this browser');
+        return;
+      }
+      try{
+        recog.start();
+      }catch(e){
+        toast('Mic error: ' + e.message);
+      }
+    } else {
+      ws.send(JSON.stringify({action:'start_mic'}));
+    }
   }
 }
 
@@ -281,7 +423,24 @@ function connect(){
     if (m.type === 'init') {
       at = m.translation || 'KJV';
       if (m.translations) buildTransSel(m.translations);
-      dbg('Init: translation=' + at);
+      const voskAvail = m.vosk_available !== false;
+      const sel = document.getElementById('mic-engine');
+      if(sel){
+        const voskOpt = sel.querySelector('option[value="vosk"]');
+        const webOpt = sel.querySelector('option[value="web"]');
+        if(voskOpt) voskOpt.disabled = !voskAvail;
+        if(webOpt) webOpt.disabled = !webSpeechSupported();
+      }
+      if(!voskAvail && speechEngine === 'vosk'){
+        speechEngine = 'web';
+        if(sel) sel.value = 'web';
+        toast('Vosk model not included — switched to Web Speech API');
+      }
+      if(!webSpeechSupported() && speechEngine === 'web'){
+        speechEngine = 'vosk';
+        if(sel) sel.value = 'vosk';
+      }
+      dbg('Init: translation=' + at + ' vosk_available=' + voskAvail);
     }
     else if (m.type === 'translation_change') {
       at = m.translation;
@@ -299,6 +458,7 @@ function connect(){
     }
     else if (m.type === 'mic_status') {
       updateMicButton(m.listening);
+      if(m.error) toast('Mic error: ' + m.error);
     }
     else if (m.type === 'speech_transcription') {
       const text = m.text || '';
@@ -356,6 +516,8 @@ function displayVerse(v, idx){
 
   document.getElementById('prev-btn').disabled=false;
   document.getElementById('next-btn').disabled=false;
+  document.getElementById('fs-prev').disabled=false;
+  document.getElementById('fs-next').disabled=false;
 
   if(document.getElementById('fsoverlay').classList.contains('on')){
     document.getElementById('fs-ref').textContent=v.reference;
@@ -377,8 +539,15 @@ function adjacentVerse(dir){
   let nextCh=v.chapter, nextVs=v.verse+dir;
   if(nextVs<1){nextCh--; nextVs=150;}
   if(nextCh<1){dbg('Cannot go before chapter 1'); return;}
+  console.log('AdjacentVerse request', v.book_name, nextCh, nextVs);
   if(ws&&ws.readyState===1)
     ws.send(JSON.stringify({action:'lookup',book_name:v.book_name,chapter:nextCh,verse:nextVs}));
+}
+
+function fsAdjacentVerse(dir){
+  event.stopPropagation();
+  console.log('Fullscreen button clicked', dir);
+  adjacentVerse(dir);
 }
 
 /* ── Queue ── */
@@ -416,6 +585,8 @@ function clearDisplay(){
   document.getElementById('proj-fs-btn').disabled=true;
   document.getElementById('prev-btn').disabled=true;
   document.getElementById('next-btn').disabled=true;
+  document.getElementById('fs-prev').disabled=true;
+  document.getElementById('fs-next').disabled=true;
   closeFS();
 }
 
@@ -552,9 +723,16 @@ function openFS(){
   document.getElementById('fs-ref').textContent=v.reference;
   document.getElementById('fs-text').textContent=v.text;
   document.getElementById('fs-trans').textContent=v.translation;
+  document.getElementById('transcript-bar').classList.remove('on');
+  document.getElementById('debug').style.display='none';
   document.getElementById('fsoverlay').classList.add('on');
+  console.log('openFS: overlay shown for', v.reference);
 }
-function closeFS(){document.getElementById('fsoverlay').classList.remove('on');}
+function closeFS(){
+  document.getElementById('fsoverlay').classList.remove('on');
+  if(micOn) document.getElementById('transcript-bar').classList.add('on');
+  document.getElementById('debug').style.display='';
+}
 
 document.addEventListener('keydown',e=>{
   const ov=document.getElementById('fsoverlay').classList.contains('on');
@@ -576,6 +754,7 @@ function toast(msg){
   clearTimeout(tt);tt=setTimeout(()=>t.style.opacity='0',2200);
 }
 
+loadEnginePref();
 connect();
 </script>
 </body>

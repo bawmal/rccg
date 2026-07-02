@@ -16,14 +16,9 @@ jobs:
           - platform: macos-latest
             label: macOS
             artifact-name: macos
-            artifact-paths: |
-              target/release/bundle/dmg/*.dmg
           - platform: windows-latest
             label: Windows
             artifact-name: windows
-            artifact-paths: |
-              target/release/bundle/msi/*.msi
-              target/release/bundle/nsis/*.exe
 
     runs-on: ${{ matrix.platform }}
     name: Build (${{ matrix.label }})
@@ -73,37 +68,107 @@ jobs:
           ls -la models/
         shell: bash
 
-      - name: Build server binary with PyInstaller
+      - name: Build full server binary
         run: |
           python3 -m PyInstaller serve.spec --distpath pyidist --workpath pyibuild --noconfirm
-        shell: bash
-
-      - name: Stage binary for Tauri externalBin
-        run: |
           mkdir -p binaries
+          TRIPLE=$(rustc -vV | sed -n 's|host: ||p')
           if [ "$RUNNER_OS" = "Windows" ]; then
-            TRIPLE=$(rustc -vV | sed -n 's|host: ||p')
             cp pyidist/server.exe "binaries/server-${TRIPLE}.exe"
+            cp "binaries/server-${TRIPLE}.exe" "binaries/server-${TRIPLE}-full.exe"
           else
-            TRIPLE=$(rustc -vV | sed -n 's|host: ||p')
             cp pyidist/server "binaries/server-${TRIPLE}"
             chmod +x "binaries/server-${TRIPLE}"
+            cp "binaries/server-${TRIPLE}" "binaries/server-${TRIPLE}-full"
           fi
-          echo "Staged binary:"
+          echo "Staged full binary:"
           ls -la binaries/
         shell: bash
 
-      - name: Build Tauri app
+      - name: Build Tauri app (full)
         run: cargo tauri build
         env:
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
 
+      - name: Collect full bundles
+        run: |
+          mkdir -p dist/bundles
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            for f in target/release/bundle/msi/*.msi target/release/bundle/nsis/*.exe; do
+              if [ -f "$f" ]; then
+                base=$(basename "$f")
+                ext="${base##*.}"
+                name="${base%.*}"
+                cp "$f" "dist/bundles/${name}-full.${ext}"
+              fi
+            done
+          else
+            for f in target/release/bundle/dmg/*.dmg; do
+              if [ -f "$f" ]; then
+                base=$(basename "$f")
+                cp "$f" "dist/bundles/${base%.dmg}-full.dmg"
+              fi
+            done
+          fi
+          echo "Full bundles collected:"
+          ls -la dist/bundles/
+        shell: bash
+
+      - name: Build lite server binary
+        run: |
+          rm -rf models/vosk-model-en-us-0.22-lgraph pyidist pyibuild
+          mkdir -p binaries
+          LITE_BUILD=1 python3 -m PyInstaller serve.spec --distpath pyidist --workpath pyibuild --noconfirm
+          TRIPLE=$(rustc -vV | sed -n 's|host: ||p')
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp pyidist/server.exe "binaries/server-${TRIPLE}.exe"
+            cp "binaries/server-${TRIPLE}.exe" "binaries/server-${TRIPLE}-lite.exe"
+          else
+            cp pyidist/server "binaries/server-${TRIPLE}"
+            chmod +x "binaries/server-${TRIPLE}"
+            cp "binaries/server-${TRIPLE}" "binaries/server-${TRIPLE}-lite"
+          fi
+          # Force Tauri to rebuild the bundle with the new binary
+          rm -rf target/release/bundle
+          echo "Staged lite binary:"
+          ls -la binaries/
+        shell: bash
+
+      - name: Build Tauri app (lite)
+        run: cargo tauri build
+        env:
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+
+      - name: Collect lite bundles
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            for f in target/release/bundle/msi/*.msi target/release/bundle/nsis/*.exe; do
+              if [ -f "$f" ]; then
+                base=$(basename "$f")
+                ext="${base##*.}"
+                name="${base%.*}"
+                cp "$f" "dist/bundles/${name}-lite.${ext}"
+              fi
+            done
+          else
+            for f in target/release/bundle/dmg/*.dmg; do
+              if [ -f "$f" ]; then
+                base=$(basename "$f")
+                cp "$f" "dist/bundles/${base%.dmg}-lite.dmg"
+              fi
+            done
+          fi
+          echo "All bundles collected:"
+          ls -la dist/bundles/
+        shell: bash
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact-name }}-build
-          path: ${{ matrix.artifact-paths }}
+          path: dist/bundles/*
           if-no-files-found: warn
 
   # Create a GitHub Release when a version tag is pushed (e.g. git tag v1.0.0 && git push --tags)
@@ -143,14 +208,19 @@ jobs:
 
             ### Installation
             - **macOS**: Download the `.dmg`, open it, drag the app to Applications
-            - **Windows**: Download the `.msi` installer and run it
+            - **Windows**: Download the `.msi` or `.exe` installer and run it
+
+            ### Installer variants
+            - **Full** (`*-full.*`): Includes the offline Vosk speech model. Works completely offline.
+            - **Lite** (`*-lite.*`): Smaller download. Does not include the Vosk model. Speech recognition uses the browser's Web Speech API (requires internet / network access).
 
             ### Requirements
             - No Python installation required — Python is bundled inside the app
-            - No internet connection required — speech recognition runs offline
+            - Full build: No internet connection required for speech recognition
+            - Lite build: Web Speech API requires an internet connection
 
             ### What's included
-            - Live Bible verse detection via microphone (offline Vosk speech recognition)
+            - Live Bible verse detection via microphone (Vosk offline or Web Speech API)
             - Manual verse lookup with autocomplete
             - Approximate scripture quote matching
             - Fullscreen projection mode
