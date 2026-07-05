@@ -115,20 +115,18 @@ jobs:
           ls -la dist/bundles/
         shell: bash
 
+      # Lite build: macOS only (Web Speech API works in WebKit/Safari engine).
+      # Skipped on Windows because WebView2 blocks Web Speech API regardless of network.
       - name: Build lite server binary
+        if: runner.os == 'macOS'
         run: |
           rm -rf models/vosk-model-en-us-0.22-lgraph pyidist pyibuild
           mkdir -p binaries
           LITE_BUILD=1 python3 -m PyInstaller serve.spec --distpath pyidist --workpath pyibuild --noconfirm
           TRIPLE=$(rustc -vV | sed -n 's|host: ||p')
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            cp pyidist/server.exe "binaries/server-${TRIPLE}.exe"
-            cp "binaries/server-${TRIPLE}.exe" "binaries/server-${TRIPLE}-lite.exe"
-          else
-            cp pyidist/server "binaries/server-${TRIPLE}"
-            chmod +x "binaries/server-${TRIPLE}"
-            cp "binaries/server-${TRIPLE}" "binaries/server-${TRIPLE}-lite"
-          fi
+          cp pyidist/server "binaries/server-${TRIPLE}"
+          chmod +x "binaries/server-${TRIPLE}"
+          cp "binaries/server-${TRIPLE}" "binaries/server-${TRIPLE}-lite"
           # Force Tauri to rebuild the bundle with the new binary
           rm -rf target/release/bundle
           echo "Staged lite binary:"
@@ -136,30 +134,21 @@ jobs:
         shell: bash
 
       - name: Build Tauri app (lite)
+        if: runner.os == 'macOS'
         run: cargo tauri build
         env:
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
 
       - name: Collect lite bundles
+        if: runner.os == 'macOS'
         run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            for f in target/release/bundle/msi/*.msi target/release/bundle/nsis/*.exe; do
-              if [ -f "$f" ]; then
-                base=$(basename "$f")
-                ext="${base##*.}"
-                name="${base%.*}"
-                cp "$f" "dist/bundles/${name}-lite.${ext}"
-              fi
-            done
-          else
-            for f in target/release/bundle/dmg/*.dmg; do
-              if [ -f "$f" ]; then
-                base=$(basename "$f")
-                cp "$f" "dist/bundles/${base%.dmg}-lite.dmg"
-              fi
-            done
-          fi
+          for f in target/release/bundle/dmg/*.dmg; do
+            if [ -f "$f" ]; then
+              base=$(basename "$f")
+              cp "$f" "dist/bundles/${base%.dmg}-lite.dmg"
+            fi
+          done
           echo "All bundles collected:"
           ls -la dist/bundles/
         shell: bash
@@ -211,8 +200,8 @@ jobs:
             - **Windows**: Download the `.msi` or `.exe` installer and run it
 
             ### Installer variants
-            - **Full** (`*-full.*`): Includes the offline Vosk speech model. Works completely offline.
-            - **Lite** (`*-lite.*`): Smaller download. Does not include the Vosk model. Speech recognition uses the browser's Web Speech API (requires internet / network access).
+            - **Full** (`*-full.*`): Includes the offline Vosk speech model. Works completely offline. Available for macOS and Windows.
+            - **Lite** (`*-lite.dmg`, macOS only): Smaller download (~60MB). No Vosk model — uses Safari's built-in Web Speech API (requires internet). Not available for Windows (WebView2 blocks Web Speech API).
 
             ### Requirements
             - No Python installation required — Python is bundled inside the app
