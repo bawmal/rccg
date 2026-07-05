@@ -277,6 +277,10 @@ def normalize_speech_text(text):
     t = re.sub(r'\bthird\s+', '3 ', t)
     # Remove filler 'and' between number words (e.g. 'one hundred and sixteen' -> 'one hundred sixteen')
     t = re.sub(r'\bhundred\s+and\s+', 'hundred ', t)
+    # Normalize % as colon (browser sometimes transcribes chapter:verse as '2%11' or '2% 11')
+    t = re.sub(r'(\d)\s*%\s*(\d)', r'\1:\2', t)   # "2%11" or "2% 11" -> "2:11"
+    t = re.sub(r'%\s*(\d)', r':\1', t)             # "%11" -> ":11"
+    t = re.sub(r'(\d)\s*%', r'\1', t)              # trailing "2%" -> "2" (chapter only, verse follows)
     # Common book-name / biblical term mishearings from Vosk small model
     t = re.sub(r'\bjon\b', 'john', t)
     t = re.sub(r'\bjn\b', 'john', t)
@@ -572,6 +576,7 @@ async def broadcast(msg_str):
 async def handle_client(ws):
     global active_translation, broadcast_clients
     broadcast_clients.add(ws)
+    last_book_context = None   # book name carried across utterance boundaries
     conn = get_db()
     print(f"[WS] client connected ({len(broadcast_clients)} total)")
     try:
@@ -641,6 +646,36 @@ async def handle_client(ws):
                     print(f"[SPEECH] {'Final' if final else 'Interim'}: {text}" +
                           (f" (+{len(alternatives)-1} alts)" if len(alternatives) > 1 else ""))
                     await broadcast(json.dumps({"type": "transcription", "text": text, "final": final}))
+
+                    # Cross-utterance context: if this utterance starts with chapter/verse numbers
+                    # and we have a book from the previous utterance, prepend it.
+                    if last_book_context:
+                        ctx_candidates = []
+                        for alt in alternatives:
+                            norm = normalize_speech_text(alt).strip()
+                            # Starts with "chapter N" or a bare number that looks like a chapter
+                            if re.match(r'^(chapter\s+)?\d+[\s:]\d+', norm) or re.match(r'^\d+\s*:\s*\d+', norm):
+                                ctx_candidates.append(last_book_context + ' ' + alt)
+                        alternatives = ctx_candidates + alternatives
+
+                    # Remember book name from this utterance for next utterance
+                    for alt in alternatives[:3]:  # check top alts only
+                        norm = normalize_speech_text(alt)
+                        bk_match = re.search(r'\b([a-z]+(?:\s[a-z]+)?)\s+\d+[:]\d+', norm)
+                        if bk_match:
+                            candidate_book = resolve_book_name(bk_match.group(1))
+                            if candidate_book:
+                                last_book_context = candidate_book
+                                break
+                        # Also catch "book of Philippians" without numbers yet
+                        bk_only = re.search(r'\b(philippians|ephesians|colossians|galatians|corinthians|thessalonians|timothy|hebrews|romans|genesis|exodus|leviticus|numbers|deuteronomy|joshua|judges|samuel|kings|chronicles|nehemiah|esther|psalms|proverbs|ecclesiastes|isaiah|jeremiah|ezekiel|daniel|hosea|matthew|mark|luke|john|acts|revelation|james|peter|jude)\b', normalize_speech_text(alt))
+                        if bk_only:
+                            candidate_book = resolve_book_name(bk_only.group(1))
+                            if candidate_book:
+                                last_book_context = candidate_book
+                                print(f"[SPEECH] 📖 Book context set: {last_book_context}")
+                                break
+
                     # Try all alternatives — first hit wins
                     detected = False
                     for alt_text in alternatives:
