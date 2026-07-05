@@ -248,6 +248,7 @@ let ws, at='KJV', queue=[], qIdx=-1;
 let micOn=false;
 let speechEngine='vosk';
 let recog=null;
+let micWatchdog=null;
 
 /* ── Engine selection ── */
 function isTauri(){
@@ -291,6 +292,21 @@ function setSpeechEngine(v){
   toast('Mic: ' + (v === 'web' ? 'Web Speech API' : 'Vosk offline'));
 }
 
+/* ── Mic watchdog: force-restart if browser silently drops recognition ── */
+function resetMicWatchdog(){
+  clearMicWatchdog();
+  // If no speech event in 12s while mic should be on, force a restart
+  micWatchdog = setTimeout(() => {
+    if(micOn && speechEngine === 'web'){
+      dbg('⚠ Watchdog: no speech activity for 12s — force restarting mic');
+      if(recog){ try{ recog.stop(); }catch(e){} }
+    }
+  }, 12000);
+}
+function clearMicWatchdog(){
+  if(micWatchdog){ clearTimeout(micWatchdog); micWatchdog = null; }
+}
+
 /* ── Web Speech API (browser native) ── */
 function initWebSpeech(){
   if(!webSpeechSupported()){
@@ -307,27 +323,42 @@ function initWebSpeech(){
   recog.onstart = () => {
     micOn = true;
     updateMicButton(true);
+    resetMicWatchdog();
   };
 
   recog.onend = () => {
     if(micOn){
-      // Auto-restart if still supposed to be listening
-      try{ recog.start(); }catch(e){}
+      // Browser stopped recognition — recreate and restart to avoid stale instance
+      setTimeout(() => {
+        if(micOn){
+          dbg('⟳ Web Speech ended unexpectedly — restarting...');
+          recog = null;
+          initWebSpeech();
+          try{ recog.start(); }catch(e){ dbg('restart failed: '+e); }
+        }
+      }, 300);
     } else {
       updateMicButton(false);
+      clearMicWatchdog();
     }
   };
 
   recog.onerror = (e) => {
     dbg('Web Speech error: ' + e.error);
-    if(e.error === 'not-allowed' || e.error === 'network' || e.error === 'service-not-allowed'){
+    if(e.error === 'not-allowed' || e.error === 'service-not-allowed'){
+      // Fatal — user denied mic permission
       micOn = false;
       updateMicButton(false);
-      toast('Web Speech error: ' + e.error);
+      clearMicWatchdog();
+      toast('Mic permission denied');
+    } else if(e.error === 'no-speech' || e.error === 'audio-capture' || e.error === 'network' || e.error === 'aborted'){
+      // Transient — browser will fire onend, which restarts automatically
+      dbg('Web Speech transient error: ' + e.error + ' — will restart');
     }
   };
 
   recog.onresult = (e) => {
+    resetMicWatchdog();
     let interim = '', final = '';
     // Collect all alternatives for final results to improve noisy-room accuracy
     const finalAlts = [];
