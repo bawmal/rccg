@@ -22,10 +22,13 @@ try:
 except ImportError:
     VOSK_AVAILABLE = False
 
-DB_PATH   = os.path.join(os.path.dirname(__file__), "data", "rhema.db")
-MODEL     = os.path.join(os.path.dirname(__file__), "models", "ggml-base.en.bin")
-VOSK_MODEL = os.path.join(os.path.dirname(__file__), "models", "vosk-model-en-us-0.22-lgraph")
-WEB_DIR   = os.path.join(os.path.dirname(__file__), "web-ui")
+# When bundled with PyInstaller (onefile), resources are extracted to sys._MEIPASS.
+# When running as a plain script, use the directory of this file.
+_BASE = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+DB_PATH   = os.path.join(_BASE, "data", "rhema.db")
+MODEL     = os.path.join(_BASE, "models", "ggml-base.en.bin")
+VOSK_MODEL = os.path.join(_BASE, "models", "vosk-model-en-us-0.22-lgraph")
+WEB_DIR   = os.path.join(_BASE, "web-ui")
 HTTP_PORT = 8080
 WS_PORT   = 8765
 

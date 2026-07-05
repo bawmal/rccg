@@ -434,13 +434,18 @@ function connect(){
       if(!voskAvail && speechEngine === 'vosk'){
         speechEngine = 'web';
         if(sel) sel.value = 'web';
-        toast('Vosk model not included — switched to Web Speech API');
+        toast('Vosk not available — using Web Speech API');
+        dbg('⚠ Vosk model not bundled — auto-switched to Web Speech API');
       }
       if(!webSpeechSupported() && speechEngine === 'web'){
         speechEngine = 'vosk';
         if(sel) sel.value = 'vosk';
+        dbg('⚠ Web Speech API not supported — using Vosk only');
       }
-      dbg('Init: translation=' + at + ' vosk_available=' + voskAvail);
+      if(!voskAvail && !webSpeechSupported()){
+        dbg('⚠ Neither Vosk nor Web Speech API available!');
+      }
+      dbg('Init: translation=' + at + ' vosk=' + voskAvail + ' engine=' + speechEngine);
     }
     else if (m.type === 'translation_change') {
       at = m.translation;
@@ -458,7 +463,10 @@ function connect(){
     }
     else if (m.type === 'mic_status') {
       updateMicButton(m.listening);
-      if(m.error) toast('Mic error: ' + m.error);
+      if(m.error){
+        toast('Mic: ' + m.error.slice(0, 60));
+        dbg('Mic error: ' + m.error);
+      }
     }
     else if (m.type === 'speech_transcription') {
       const text = m.text || '';
