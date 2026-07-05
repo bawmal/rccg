@@ -270,9 +270,13 @@ def normalize_speech_text(text):
     t = re.sub(r'\bthe\s+book\s+of\s+', '', t)
     t = re.sub(r'\bbook\s+of\s+', '', t)
     t = re.sub(r'\bthe\s+epistle\s+(of|to)\s+(the\s+)?', '', t)
+    # Strip leading 'the' before a book name (e.g. 'the Psalms 116:14')
+    t = re.sub(r'^the\s+', '', t)
     t = re.sub(r'\bfirst\s+', '1 ', t)
     t = re.sub(r'\bsecond\s+', '2 ', t)
     t = re.sub(r'\bthird\s+', '3 ', t)
+    # Remove filler 'and' between number words (e.g. 'one hundred and sixteen' -> 'one hundred sixteen')
+    t = re.sub(r'\bhundred\s+and\s+', 'hundred ', t)
     # Common book-name / biblical term mishearings from Vosk small model
     t = re.sub(r'\bjon\b', 'john', t)
     t = re.sub(r'\bjn\b', 'john', t)
@@ -315,6 +319,7 @@ def normalize_speech_text(text):
     # chapter and verse numbers don't combine across the boundary.
     t = re.sub(r'\bchapter\s+', '', t)
     t = re.sub(r'\bverse\s+', ': ', t)
+    t = re.sub(r'\bverses?\s+', ': ', t)
     # Convert spoken number-word sequences to digits (e.g. "twenty three" -> "23")
     t = _replace_number_word_sequences(t)
     return t
