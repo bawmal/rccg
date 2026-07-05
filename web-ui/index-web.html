@@ -302,6 +302,7 @@ function initWebSpeech(){
   recog.continuous = true;
   recog.interimResults = true;
   recog.lang = 'en-US';
+  recog.maxAlternatives = 3;
 
   recog.onstart = () => {
     micOn = true;
@@ -328,25 +329,36 @@ function initWebSpeech(){
 
   recog.onresult = (e) => {
     let interim = '', final = '';
+    // Collect all alternatives for final results to improve noisy-room accuracy
+    const finalAlts = [];
     for(let i = e.resultIndex; i < e.results.length; i++){
-      const txt = e.results[i][0].transcript;
-      if(e.results[i].isFinal) final += txt + ' ';
-      else interim += txt;
+      if(e.results[i].isFinal){
+        final += e.results[i][0].transcript + ' ';
+        for(let a = 0; a < e.results[i].length; a++){
+          finalAlts.push(e.results[i][a].transcript.trim());
+        }
+      } else {
+        interim += e.results[i][0].transcript;
+      }
     }
     const bar = document.getElementById('transcript-bar');
     if(final.trim()){
       bar.textContent = '✓ ' + final.trim();
       bar.classList.add('on');
       if(ws && ws.readyState === 1){
-        ws.send(JSON.stringify({action: 'speech_transcription', text: final.trim(), final: true}));
+        ws.send(JSON.stringify({action: 'speech_transcription', text: final.trim(), final: true, alternatives: finalAlts}));
       }
     }
-    if(interim.trim()){
+    // Only send interim if long enough to be meaningful (avoids flooding on short noise bursts)
+    if(interim.trim() && interim.trim().length > 15){
       bar.textContent = '… ' + interim.trim();
       bar.classList.add('on');
       if(ws && ws.readyState === 1){
         ws.send(JSON.stringify({action: 'speech_transcription', text: interim.trim(), final: false}));
       }
+    } else if(interim.trim()){
+      bar.textContent = '… ' + interim.trim();
+      bar.classList.add('on');
     }
   };
   return true;

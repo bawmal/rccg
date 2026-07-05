@@ -621,12 +621,21 @@ async def handle_client(ws):
             elif action == "speech_transcription":
                 text = msg.get("text", "").strip()
                 final = msg.get("final", False)
+                # All alternatives from Web Speech API (helps in noisy rooms)
+                alternatives = msg.get("alternatives", [text])
+                if text and text not in alternatives:
+                    alternatives.insert(0, text)
                 if text:
-                    print(f"[SPEECH] {'Final' if final else 'Interim'}: {text}")
+                    print(f"[SPEECH] {'Final' if final else 'Interim'}: {text}" +
+                          (f" (+{len(alternatives)-1} alts)" if len(alternatives) > 1 else ""))
                     await broadcast(json.dumps({"type": "transcription", "text": text, "final": final}))
-                    if len(text) > 3:
-                        # Try direct reference detection on both partial and final results
-                        ref = detect_verse_ref(text)
+                    # Try all alternatives — first hit wins
+                    detected = False
+                    for alt_text in alternatives:
+                        if not alt_text or len(alt_text) < 4:
+                            continue
+                        # Try direct reference detection
+                        ref = detect_verse_ref(alt_text)
                         if ref:
                             book, ch, vs = ref
                             v = lookup_verse(conn, book, ch, vs, active_translation)
@@ -634,25 +643,33 @@ async def handle_client(ws):
                                 v["type"]       = "verse_detected"
                                 v["source"]     = "direct"
                                 v["confidence"] = 1.0
-                                print(f"[SPEECH] ✅ Verse: {v['reference']}")
+                                print(f"[SPEECH] ✅ Verse: {v['reference']} (alt: '{alt_text}')")
                                 await broadcast(json.dumps(v))
-                        # Try quote matching (lower threshold for partial so user sees candidates quickly)
-                        if not ref and len(text) > 10:
-                            results = search_quote(conn, text, active_translation, 5)
-                            if results:
-                                top = results[0]
-                                auto_threshold = 0.65 if final else 0.80
-                                if top["score"] >= auto_threshold:
-                                    # High confidence — auto-display
-                                    top["type"]       = "verse_detected"
-                                    top["source"]     = "quote"
-                                    top["confidence"] = top["score"]
-                                    print(f"[SPEECH] ✅ Auto-display ({top['score']*100:.0f}%): {top['reference']}")
-                                    await broadcast(json.dumps(top))
-                                elif top["score"] >= 0.2:
-                                    # Show candidates for presenter to choose
-                                    print(f"[SPEECH] 📝 Candidates ({len(results)}): top={top['score']*100:.0f}%")
-                                    await broadcast(json.dumps({"type": "candidates", "candidates": results}))
+                                detected = True
+                                break
+                    # Quote matching across all alternatives if no direct ref found
+                    if not detected:
+                        best_results = None
+                        best_score = 0.0
+                        for alt_text in alternatives:
+                            if not alt_text or len(alt_text) <= 10:
+                                continue
+                            results = search_quote(conn, alt_text, active_translation, 5)
+                            if results and results[0]["score"] > best_score:
+                                best_score = results[0]["score"]
+                                best_results = results
+                        if best_results:
+                            top = best_results[0]
+                            auto_threshold = 0.55 if final else 0.78
+                            if top["score"] >= auto_threshold:
+                                top["type"]       = "verse_detected"
+                                top["source"]     = "quote"
+                                top["confidence"] = top["score"]
+                                print(f"[SPEECH] ✅ Auto-display ({top['score']*100:.0f}%): {top['reference']}")
+                                await broadcast(json.dumps(top))
+                            elif top["score"] >= 0.2:
+                                print(f"[SPEECH] 📝 Candidates ({len(best_results)}): top={top['score']*100:.0f}%")
+                                await broadcast(json.dumps({"type": "candidates", "candidates": best_results}))
 
             elif action == "search_quote":
                 text  = msg.get("text", "")
