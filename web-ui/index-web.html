@@ -445,7 +445,7 @@ function connect(){
       if(!voskAvail && !webSpeechSupported()){
         dbg('⚠ Neither Vosk nor Web Speech API available!');
       }
-      dbg('Init: translation=' + at + ' vosk=' + voskAvail + ' engine=' + speechEngine);
+      dbg('Init: translation=' + at + ' vosk=' + voskAvail + ' engine=' + speechEngine + (m.debug_base ? ' base=' + m.debug_base : ''));
     }
     else if (m.type === 'translation_change') {
       at = m.translation;

@@ -1,6 +1,10 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use tauri::Manager;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 struct PythonServer(Mutex<Option<Child>>);
 
@@ -40,12 +44,14 @@ fn main() {
             let server_bin = find_server_binary().expect("Bundled server binary not found");
             println!("🚀 Launching: {}", server_bin.display());
 
-            let child = Command::new(&server_bin)
-                .current_dir(server_bin.parent().unwrap())
-                .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit())
-                .spawn()
-                .expect("Failed to start server binary");
+            let mut cmd = Command::new(&server_bin);
+            cmd.current_dir(server_bin.parent().unwrap())
+               .stdout(Stdio::null())
+               .stderr(Stdio::null());
+            // On Windows, prevent a separate console window from appearing
+            #[cfg(windows)]
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            let child = cmd.spawn().expect("Failed to start server binary");
 
             *app.state::<PythonServer>().0.lock().unwrap() = Some(child);
 

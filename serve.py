@@ -566,11 +566,13 @@ async def handle_client(ws):
         # Send init
         trans = get_translations(conn)
         vosk_available = VOSK_AVAILABLE and os.path.exists(VOSK_MODEL)
+        print(f"[WS] init: vosk_available={vosk_available} BASE={_BASE} MODEL_EXISTS={os.path.exists(VOSK_MODEL)}")
         await ws.send(json.dumps({
             "type": "init",
             "translation": active_translation,
             "translations": trans,
             "vosk_available": vosk_available,
+            "debug_base": _BASE,
         }))
 
         async for raw in ws:
