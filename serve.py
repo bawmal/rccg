@@ -266,6 +266,13 @@ def _replace_number_word_sequences(text):
 def normalize_speech_text(text):
     """Normalize spoken text so verse detection works with number words and common mishearings."""
     t = text.lower()
+    # Strip common spoken prefixes that break book name matching
+    t = re.sub(r'\bthe\s+book\s+of\s+', '', t)
+    t = re.sub(r'\bbook\s+of\s+', '', t)
+    t = re.sub(r'\bthe\s+epistle\s+(of|to)\s+(the\s+)?', '', t)
+    t = re.sub(r'\bfirst\s+', '1 ', t)
+    t = re.sub(r'\bsecond\s+', '2 ', t)
+    t = re.sub(r'\bthird\s+', '3 ', t)
     # Common book-name / biblical term mishearings from Vosk small model
     t = re.sub(r'\bjon\b', 'john', t)
     t = re.sub(r'\bjn\b', 'john', t)
@@ -828,6 +835,9 @@ def detect_verse_ref(text):
     # Collapse multiple spaces
     t = re.sub(r'  +', ' ', t)
 
+    # Single-chapter books that have no chapter number when spoken
+    SINGLE_CHAPTER_BOOKS = {'obadiah', 'philemon', 'jude', '2 john', '3 john', 'ii john', 'iii john'}
+
     # Pattern 1: "Book Chapter:Verse" with space — e.g. "John 3:16", "1 Corinthians 13:4"
     m = re.search(r'((?:[123]\s)?[a-z]+(?:\s(?:of\s)?[a-z]+)?)\s+(\d+):(\d+)', t)
     # Pattern 2: "BookChapter:Verse" no space — e.g. "exo1:1", "gen1:1", "1cor13:4"
@@ -836,15 +846,25 @@ def detect_verse_ref(text):
     # Pattern 3: spoken "book chapter verse" — e.g. "genesis 1 1"
     if not m:
         m = re.search(r'((?:[123]\s)?[a-z]+(?:\s(?:of\s)?[a-z]+)?)\s+(\d+)\s+(\d+)', t)
-    if not m:
-        return None
-    raw_book = m.group(1).strip()
-    chapter  = int(m.group(2))
-    verse    = int(m.group(3))
-    book = resolve_book_name(raw_book)
-    if not book:
-        return None
-    return book, chapter, verse
+
+    if m:
+        raw_book = m.group(1).strip()
+        chapter  = int(m.group(2))
+        verse    = int(m.group(3))
+        book = resolve_book_name(raw_book)
+        if book:
+            return book, chapter, verse
+
+    # Pattern 4: single-chapter book "Book :Verse" or "Book verse N" (no chapter spoken)
+    m4 = re.search(r'((?:[123]\s)?[a-z]+)\s*:(\d+)', t)
+    if m4:
+        raw_book = m4.group(1).strip()
+        if raw_book in SINGLE_CHAPTER_BOOKS:
+            book = resolve_book_name(raw_book)
+            if book:
+                return book, 1, int(m4.group(2))
+
+    return None
 
 def _is_poor_transcription(text):
     """Filter out poor quality transcriptions that cause false positives."""
