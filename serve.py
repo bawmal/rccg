@@ -322,8 +322,11 @@ def normalize_speech_text(text):
     # Convert spoken reference markers to punctuation before number parsing so
     # chapter and verse numbers don't combine across the boundary.
     t = re.sub(r'\bchapter\s+', '', t)
-    t = re.sub(r'\bverse\s+', ': ', t)
-    t = re.sub(r'\bverses?\s+', ': ', t)
+    t = re.sub(r'\bverse\s+', ':', t)
+    t = re.sub(r'\bverses?\s+', ':', t)
+    # Common mishearings in loud halls: 'versus' -> 'verse', 'chapters' -> 'chapter'
+    t = re.sub(r'\bversus\b', 'verse', t)
+    t = re.sub(r'\bchapters\b', 'chapter', t)
     # Convert spoken number-word sequences to digits (e.g. "twenty three" -> "23")
     t = _replace_number_word_sequences(t)
     return t
@@ -424,13 +427,25 @@ def _ngrams(words, n):
     """Generate n-grams from a word list."""
     return [' '.join(words[i:i+n]) for i in range(len(words) - n + 1)]
 
+def _extract_book_names(text):
+    """Return canonical book names found in the query text."""
+    found = []
+    t = text.lower()
+    # Multi-word books first to avoid matching '1' separately from '1 Corinthians'
+    for canon in sorted(CANONICAL_BOOKS, key=lambda x: -len(x)):
+        if canon.lower() in t:
+            found.append(canon)
+            t = t.replace(canon.lower(), '')  # avoid double counting
+    return found
+
 def search_quote(conn, text, translation, limit=5):
     """
     Phrase-first quote search:
     1. Build SQL using distinctive 3-word phrases (trigrams) as LIKE filters — 
        this fetches verses containing the actual spoken phrases, not just words.
     2. Score fetched candidates by n-gram overlap.
-    3. Return ranked list so presenter can choose.
+    3. Boost candidates whose book name appears in the query.
+    4. Return ranked list so presenter can choose.
     """
     t = text.lower().strip()
     all_words = re.findall(r'[a-z]+', t)
@@ -439,6 +454,7 @@ def search_quote(conn, text, translation, limit=5):
     all_words_set = set(all_words)
     sig = _sig_words(t)
     tid = get_translation_id(conn, translation)
+    book_names_in_query = _extract_book_names(t)
 
     # ── Build SQL using PHRASE filters (trigrams + bigrams from full text) ──
     # This ensures "was the word" fetches John 1:1, not just Genesis
@@ -514,6 +530,11 @@ def search_quote(conn, text, translation, limit=5):
         all_score = len(all_words_set & verse_set) / max(len(all_words_set), 1)
 
         score = (phrase_score * 0.75) + (sig_score * 0.15) + (all_score * 0.10)
+
+        # Signal 4: book-name boost (strong signal in noisy halls when book is clear)
+        if book_names_in_query and row["book_name"] in book_names_in_query:
+            score = min(score + 0.35, 1.0)
+
         score = min(score, 1.0)
 
         if score > 0.05:
@@ -576,7 +597,9 @@ async def broadcast(msg_str):
 async def handle_client(ws):
     global active_translation, broadcast_clients
     broadcast_clients.add(ws)
-    last_book_context = None   # book name carried across utterance boundaries
+    last_book_context = None    # book name carried across utterance boundaries
+    last_chapter_context = None # chapter number carried across utterance boundaries
+    last_detected_ref = None    # suppress duplicate auto-display spam
     conn = get_db()
     print(f"[WS] client connected ({len(broadcast_clients)} total)")
     try:
@@ -647,59 +670,100 @@ async def handle_client(ws):
                           (f" (+{len(alternatives)-1} alts)" if len(alternatives) > 1 else ""))
                     await broadcast(json.dumps({"type": "transcription", "text": text, "final": final}))
 
-                    # Cross-utterance context: if this utterance starts with chapter/verse numbers
-                    # and we have a book from the previous utterance, prepend it.
-                    if last_book_context:
-                        ctx_candidates = []
-                        for alt in alternatives:
-                            norm = normalize_speech_text(alt).strip()
-                            # Starts with "chapter N" or a bare number that looks like a chapter
-                            if re.match(r'^(chapter\s+)?\d+[\s:]\d+', norm) or re.match(r'^\d+\s*:\s*\d+', norm):
-                                ctx_candidates.append(last_book_context + ' ' + alt)
-                        alternatives = ctx_candidates + alternatives
+                    # Build a richer set of candidate strings from the current utterance
+                    candidate_strings = set(alternatives[:3])
+                    for alt in alternatives[:3]:
+                        norm = normalize_speech_text(alt).strip()
+                        # Cross-utterance: chapter/verse numbers with book context
+                        if last_book_context:
+                            # "chapter N verse M" -> "book N:M" (normalize strips chapter/verse)
+                            m = re.match(r'^(\d+)\s+(\d+)$', norm)
+                            if m:
+                                candidate_strings.add(f"{last_book_context} {m.group(1)}:{m.group(2)}")
+                            # "chapter:N verse M" or "1:5" -> "book 1:5"
+                            m_colon = re.match(r'^(\d+)\s*:\s*(\d+)$', norm)
+                            if m_colon:
+                                candidate_strings.add(f"{last_book_context} {m_colon.group(1)}:{m_colon.group(2)}")
+                            # "chapter N" only (normalized to single number)
+                            m_ch = re.match(r'^(\d+)$', norm)
+                            if m_ch and not last_chapter_context:
+                                candidate_strings.add(f"{last_book_context} {m_ch.group(1)}:1")
+                            # "verse N" only (normalized to ':N')
+                            if last_chapter_context:
+                                m_vs = re.match(r'^:(\d+)$', norm)
+                                if m_vs:
+                                    candidate_strings.add(f"{last_book_context} {last_chapter_context}:{m_vs.group(1)}")
+                        # Cross-utterance: bare "N:M" or "N M" prepended with last book
+                        if last_book_context:
+                            if re.match(r'^\d+\s*:\s*\d+', norm):
+                                candidate_strings.add(f"{last_book_context} {alt}")
+                            elif re.match(r'^\d+\s+\d+$', norm):
+                                candidate_strings.add(f"{last_book_context} {alt}")
 
-                    # Remember book name from this utterance for next utterance
-                    for alt in alternatives[:3]:  # check top alts only
-                        norm = normalize_speech_text(alt)
-                        bk_match = re.search(r'\b([a-z]+(?:\s[a-z]+)?)\s+\d+[:]\d+', norm)
+                    # Try all candidate strings for a direct reference
+                    detected_ref = None
+                    detected_source = None
+                    for cand in sorted(candidate_strings, key=len, reverse=True):
+                        if not cand or len(cand) < 4:
+                            continue
+                        ref = detect_verse_ref(cand)
+                        if ref:
+                            book, ch, vs = ref
+                            v = lookup_verse(conn, book, ch, vs, active_translation)
+                            if v:
+                                detected_ref = v
+                                detected_source = "direct"
+                                break
+
+                    # Update context memory from the original transcript (not just candidates)
+                    for alt in alternatives[:3]:
+                        norm = normalize_speech_text(alt).strip()
+                        # Book + chapter + verse
+                        bk_match = re.search(r'\b([a-z]+(?:\s[a-z]+)?)\s+(\d+)[:\s](\d+)', norm)
                         if bk_match:
                             candidate_book = resolve_book_name(bk_match.group(1))
                             if candidate_book:
                                 last_book_context = candidate_book
+                                last_chapter_context = int(bk_match.group(2))
                                 break
-                        # Also catch "book of Philippians" without numbers yet
-                        bk_only = re.search(r'\b(philippians|ephesians|colossians|galatians|corinthians|thessalonians|timothy|hebrews|romans|genesis|exodus|leviticus|numbers|deuteronomy|joshua|judges|samuel|kings|chronicles|nehemiah|esther|psalms|proverbs|ecclesiastes|isaiah|jeremiah|ezekiel|daniel|hosea|matthew|mark|luke|john|acts|revelation|james|peter|jude)\b', normalize_speech_text(alt))
+                        # Book only (e.g. "the book of Joshua")
+                        bk_only = re.search(r'\b(philippians|ephesians|colossians|galatians|corinthians|thessalonians|timothy|hebrews|romans|genesis|exodus|leviticus|numbers|deuteronomy|joshua|judges|samuel|kings|chronicles|nehemiah|esther|psalms|proverbs|ecclesiastes|isaiah|jeremiah|ezekiel|daniel|hosea|matthew|mark|luke|john|acts|revelation|james|peter|jude)\b', norm)
                         if bk_only:
                             candidate_book = resolve_book_name(bk_only.group(1))
                             if candidate_book:
                                 last_book_context = candidate_book
                                 print(f"[SPEECH] 📖 Book context set: {last_book_context}")
                                 break
+                        # Chapter only (e.g. "chapter 1" normalized to "1")
+                        ch_only = re.match(r'^(\d+)$', norm)
+                        if ch_only and last_book_context and not last_chapter_context:
+                            last_chapter_context = int(ch_only.group(1))
+                            print(f"[SPEECH] 📑 Chapter context set: {last_book_context} {last_chapter_context}")
+                            break
+                        # Verse only (e.g. "verse 5" normalized to ":5")
+                        vs_only = re.match(r'^:(\d+)$', norm)
+                        if vs_only and last_book_context and last_chapter_context:
+                            print(f"[SPEECH] 📜 Verse context: {last_book_context} {last_chapter_context}:{vs_only.group(1)}")
+                            break
 
-                    # Try all alternatives — first hit wins
-                    detected = False
-                    for alt_text in alternatives:
-                        if not alt_text or len(alt_text) < 4:
-                            continue
-                        # Try direct reference detection
-                        ref = detect_verse_ref(alt_text)
-                        if ref:
-                            book, ch, vs = ref
-                            v = lookup_verse(conn, book, ch, vs, active_translation)
-                            if v:
-                                v["type"]       = "verse_detected"
-                                v["source"]     = "direct"
-                                v["confidence"] = 1.0
-                                print(f"[SPEECH] ✅ Verse: {v['reference']} (alt: '{alt_text}')")
-                                await broadcast(json.dumps(v))
-                                detected = True
-                                break
-                    # Quote matching across all alternatives if no direct ref found
-                    if not detected:
+                    # Broadcast direct detection if found and not a duplicate
+                    if detected_ref:
+                        ref_key = f"{detected_ref['reference']}"
+                        if ref_key == last_detected_ref:
+                            print(f"[SPEECH] ⏭ Already displayed {ref_key}, skipping duplicate")
+                        else:
+                            detected_ref["type"]       = "verse_detected"
+                            detected_ref["source"]     = detected_source
+                            detected_ref["confidence"] = 1.0
+                            print(f"[SPEECH] ✅ Verse: {detected_ref['reference']}")
+                            await broadcast(json.dumps(detected_ref))
+                            last_detected_ref = ref_key
+                    else:
+                        # Quote matching across all alternatives if no direct ref found
                         best_results = None
                         best_score = 0.0
                         for alt_text in alternatives:
-                            if not alt_text or len(alt_text) <= 10:
+                            if not alt_text or len(alt_text) <= 8:
                                 continue
                             results = search_quote(conn, alt_text, active_translation, 5)
                             if results and results[0]["score"] > best_score:
@@ -707,14 +771,20 @@ async def handle_client(ws):
                                 best_results = results
                         if best_results:
                             top = best_results[0]
-                            auto_threshold = 0.55 if final else 0.78
+                            ref_key = top["reference"]
+                            # Lower thresholds for noisy halls
+                            auto_threshold = 0.45 if final else 0.65
                             if top["score"] >= auto_threshold:
-                                top["type"]       = "verse_detected"
-                                top["source"]     = "quote"
-                                top["confidence"] = top["score"]
-                                print(f"[SPEECH] ✅ Auto-display ({top['score']*100:.0f}%): {top['reference']}")
-                                await broadcast(json.dumps(top))
-                            elif top["score"] >= 0.2:
+                                if ref_key == last_detected_ref:
+                                    print(f"[SPEECH] ⏭ Already displayed {ref_key}, skipping duplicate")
+                                else:
+                                    top["type"]       = "verse_detected"
+                                    top["source"]     = "quote"
+                                    top["confidence"] = top["score"]
+                                    print(f"[SPEECH] ✅ Auto-display ({top['score']*100:.0f}%): {top['reference']}")
+                                    await broadcast(json.dumps(top))
+                                    last_detected_ref = ref_key
+                            elif top["score"] >= 0.15:
                                 print(f"[SPEECH] 📝 Candidates ({len(best_results)}): top={top['score']*100:.0f}%")
                                 await broadcast(json.dumps({"type": "candidates", "candidates": best_results}))
 

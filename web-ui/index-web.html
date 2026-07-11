@@ -603,6 +603,11 @@ function fsAdjacentVerse(dir){
 
 /* ── Queue ── */
 function addToQueue(v){
+  // Skip duplicate references in the detected queue
+  if(queue.some(q => q.reference === v.reference)){
+    dbg('addToQueue: duplicate ' + v.reference + ' skipped');
+    return;
+  }
   queue.push(v);
   document.getElementById('det-empty')?.remove();
   const list=document.getElementById('det-list');
