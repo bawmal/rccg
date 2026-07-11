@@ -154,6 +154,8 @@ aside{background:var(--surface);border-left:1px solid var(--border);display:flex
   </div>
   <div class="sp"></div>
   <button id="mic-btn" onclick="toggleMic()" style="gap:6px">&#x1F3A4; Start Mic</button>
+  <button id="hold-btn" onclick="toggleHold()" style="gap:4px">&#x1F512; Hold</button>
+  <button id="queue-next-btn" onclick="nextInQueue()" disabled>Next Verse</button>
   <button onclick="clearDisplay()">Clear</button>
   <button id="fsbtn" class="primary" onclick="openFS()" disabled>&#x26F6; Fullscreen</button>
 </header>
@@ -224,6 +226,9 @@ aside{background:var(--surface);border-left:1px solid var(--border);display:flex
         Detected Verses
         <button style="padding:2px 7px;font-size:10px;border-radius:4px" onclick="clearQueue()">Clear</button>
       </div>
+      <div class="sec-body" style="padding-top:8px;padding-bottom:8px">
+        <input id="det-search" type="text" placeholder="Find a verse..." oninput="filterQueue()" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px;font-size:12px;outline:none;font-family:inherit"/>
+      </div>
       <div class="sec-scroll" id="det-list">
         <div class="empty-msg" id="det-empty">Detected verses will appear here</div>
       </div>
@@ -257,6 +262,7 @@ let recog=null;
 let micWatchdog=null;
 let micDeviceId='';
 let audioCtx=null, analyser=null, vuStream=null, vuRaf=null, vuNode=null;
+let holdMode=false;
 
 /* ── Engine selection ── */
 function isTauri(){
@@ -618,10 +624,18 @@ function connect(){
       toast('Version: ' + at);
     }
     else if (m.type === 'verse_detected') {
-      dbg('verse_detected: ' + m.reference + ' trans:' + m.translation);
+      dbg('verse_detected: ' + m.reference + ' source:' + (m.source||'detected') + ' trans:' + m.translation);
       addToQueue(m);
-      displayVerse(m, queue.length - 1);
+      // Manual lookups / selected candidates always display. Speech detections
+      // (direct or quote) obey Hold mode so preaching doesn't yank the screen.
+      const isAuto = (m.source === 'direct' || m.source === 'quote' || !m.source);
+      if(!isAuto || !holdMode){
+        displayVerse(m, queue.length - 1);
+      } else {
+        toast('Held: ' + m.reference + ' (click Next or the card to project)');
+      }
       hideCands();
+      updateQueueNextButton();
     }
     else if (m.type === 'candidates') {
       showCands(m.candidates);
@@ -691,6 +705,7 @@ function displayVerse(v, idx){
   document.getElementById('next-btn').disabled=false;
   document.getElementById('fs-prev').disabled=false;
   document.getElementById('fs-next').disabled=false;
+  updateQueueNextButton();
 
   if(document.getElementById('fsoverlay').classList.contains('on')){
     document.getElementById('fs-ref').textContent=v.reference;
@@ -723,6 +738,47 @@ function fsAdjacentVerse(dir){
   adjacentVerse(dir);
 }
 
+/* ── Hold / Next control ── */
+function toggleHold(){
+  holdMode = !holdMode;
+  const btn = document.getElementById('hold-btn');
+  if(btn){
+    btn.textContent = holdMode ? '🔓 Unlock' : '🔒 Hold';
+    btn.classList.toggle('primary', holdMode);
+  }
+  dbg('Hold mode: ' + (holdMode?'ON':'OFF'));
+  toast(holdMode ? 'Hold: new auto-detections will not project' : 'Hold: off');
+}
+
+function nextInQueue(){
+  if(queue.length === 0) return;
+  const idx = queue.length - 1;
+  displayVerse(queue[idx], idx);
+  // Scroll to the bottom of the list
+  const list = document.getElementById('det-list');
+  if(list) list.scrollTop = list.scrollHeight;
+}
+
+function updateQueueNextButton(){
+  const btn = document.getElementById('queue-next-btn');
+  if(btn) btn.disabled = queue.length === 0 || qIdx === queue.length - 1;
+}
+
+function filterQueue(){
+  const term = document.getElementById('det-search').value.trim().toLowerCase();
+  const list = document.getElementById('det-list');
+  if(!list) return;
+  let hasVisible = false;
+  list.querySelectorAll('.det-card').forEach((card, i) => {
+    const v = queue[i];
+    const match = !term || (v && (v.reference||'').toLowerCase().includes(term));
+    card.style.display = match ? '' : 'none';
+    if(match) hasVisible = true;
+  });
+  const empty = document.getElementById('det-empty');
+  if(empty) empty.style.display = (hasVisible ? 'none' : 'block');
+}
+
 /* ── Queue ── */
 function addToQueue(v){
   // Skip duplicate references in the detected queue
@@ -731,7 +787,8 @@ function addToQueue(v){
     return;
   }
   queue.push(v);
-  document.getElementById('det-empty')?.remove();
+  const empty = document.getElementById('det-empty');
+  if(empty) empty.remove();
   const list=document.getElementById('det-list');
   const idx=queue.length-1;
   const conf=Math.round((v.confidence||1)*100);
@@ -746,13 +803,17 @@ function addToQueue(v){
   d.onclick=()=>displayVerse(v,idx);
   list.appendChild(d);
   list.scrollTop=list.scrollHeight;
+  filterQueue();
+  updateQueueNextButton();
 }
 
 function clearQueue(){
   queue=[];qIdx=-1;
   document.getElementById('det-list').innerHTML='<div class="empty-msg" id="det-empty">Detected verses will appear here</div>';
+  document.getElementById('det-search').value='';
   clearDisplay();
   hideCands();
+  updateQueueNextButton();
 }
 
 function clearDisplay(){
@@ -762,7 +823,7 @@ function clearDisplay(){
   document.getElementById('fsbtn').disabled=true;
   document.getElementById('proj-fs-btn').disabled=true;
   document.getElementById('prev-btn').disabled=true;
-  document.getElementById('next-btn').disabled=true;
+  document.getElementById('queue-next-btn').disabled=(queue.length===0);
   document.getElementById('fs-prev').disabled=true;
   document.getElementById('fs-next').disabled=true;
   closeFS();

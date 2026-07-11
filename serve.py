@@ -773,7 +773,7 @@ async def handle_client(ws):
                             top = best_results[0]
                             ref_key = top["reference"]
                             # Lower thresholds for noisy halls
-                            auto_threshold = 0.45 if final else 0.65
+                            auto_threshold = 0.75 if final else 0.85
                             if top["score"] >= auto_threshold:
                                 if ref_key == last_detected_ref:
                                     print(f"[SPEECH] ⏭ Already displayed {ref_key}, skipping duplicate")
