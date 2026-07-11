@@ -146,6 +146,12 @@ aside{background:var(--surface);border-left:1px solid var(--border);display:flex
       <option value="web">Web Speech API</option>
     </select>
   </label>
+  <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;white-space:nowrap" id="mic-device-wrap" hidden>
+    Input <select id="mic-device" onchange="setMicDevice(this.value)"></select>
+  </label>
+  <div id="mic-vu" hidden style="width:60px;height:18px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;overflow:hidden;position:relative;flex-shrink:0">
+    <div id="mic-vu-fill" style="height:100%;width:0%;background:linear-gradient(90deg,var(--live),var(--amber));transition:width 80ms linear"></div>
+  </div>
   <div class="sp"></div>
   <button id="mic-btn" onclick="toggleMic()" style="gap:6px">&#x1F3A4; Start Mic</button>
   <button onclick="clearDisplay()">Clear</button>
@@ -249,6 +255,8 @@ let micOn=false;
 let speechEngine='vosk';
 let recog=null;
 let micWatchdog=null;
+let micDeviceId='';
+let audioCtx=null, analyser=null, vuStream=null, vuRaf=null, vuNode=null;
 
 /* ── Engine selection ── */
 function isTauri(){
@@ -272,6 +280,8 @@ function loadEnginePref(){
     const webOpt = sel.querySelector('option[value="web"]');
     if(webOpt) webOpt.disabled = !webSpeechSupported();
   }
+  micDeviceId = localStorage.getItem('rhema-mic-device') || '';
+  if(speechEngine === 'web') initAudioDevices();
   dbg('Mic engine: ' + speechEngine + (isTauri() ? ' (Tauri)' : ' (browser)'));
 }
 
@@ -288,8 +298,127 @@ function setSpeechEngine(v){
   }
   speechEngine = v;
   localStorage.setItem('rhema-mic-engine', v);
+  // Show/hide device selector and VU meter for Web Speech path
+  const devWrap = document.getElementById('mic-device-wrap');
+  const vu = document.getElementById('mic-vu');
+  if(devWrap) devWrap.hidden = (v !== 'web');
+  if(vu) vu.hidden = (v !== 'web') || !vuStream;
+  if(v === 'web') initAudioDevices();
+  else stopVUMeter();
   dbg('Switched mic engine to ' + v);
   toast('Mic: ' + (v === 'web' ? 'Web Speech API' : 'Vosk offline'));
+}
+
+/* ── Audio device selection and VU meter for Web Speech API ── */
+function stopVUMeter(){
+  if(vuRaf){ cancelAnimationFrame(vuRaf); vuRaf = null; }
+  if(vuStream){ vuStream.getTracks().forEach(t => t.stop()); vuStream = null; }
+  if(vuNode){ try{ vuNode.disconnect(); }catch(e){} vuNode = null; }
+  const fill = document.getElementById('mic-vu-fill');
+  if(fill) fill.style.width = '0%';
+  const vu = document.getElementById('mic-vu');
+  if(vu) vu.hidden = true;
+}
+
+function drawVU(){
+  if(!analyser) return;
+  const data = new Uint8Array(analyser.frequencyBinCount);
+  analyser.getByteFrequencyData(data);
+  let sum = 0;
+  for(let i = 0; i < data.length; i++) sum += data[i];
+  const avg = sum / data.length;
+  const percent = Math.min(100, Math.max(0, avg * 1.5));
+  const fill = document.getElementById('mic-vu-fill');
+  if(fill) fill.style.width = percent + '%';
+  vuRaf = requestAnimationFrame(drawVU);
+}
+
+function startVUMeter(stream){
+  stopVUMeter();
+  if(!stream) return;
+  vuStream = stream;
+  try{
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    vuNode = audioCtx.createMediaStreamSource(stream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    vuNode.connect(analyser);
+    const vu = document.getElementById('mic-vu');
+    if(vu) vu.hidden = false;
+    drawVU();
+  }catch(e){ dbg('VU meter error: '+e); }
+}
+
+function setMicDevice(id){
+  micDeviceId = id;
+  localStorage.setItem('rhema-mic-device', id);
+  dbg('Mic device selected: ' + (id || 'default'));
+  // If currently listening, restart to pick up the new device
+  if(micOn && speechEngine === 'web'){
+    if(recog){ try{ recog.stop(); }catch(e){} }
+    micOn = false;
+    setTimeout(() => { startWebSpeechMic(); }, 300);
+  }
+}
+
+async function enumerateAudioDevices(){
+  // Request permission once to populate labels
+  try{
+    const tmp = await navigator.mediaDevices.getUserMedia({ audio: true });
+    tmp.getTracks().forEach(t => t.stop());
+  }catch(e){ dbg('getUserMedia permission error: ' + e.name); }
+  try{
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const inputs = devices.filter(d => d.kind === 'audioinput');
+    const sel = document.getElementById('mic-device');
+    const wrap = document.getElementById('mic-device-wrap');
+    if(!sel) return;
+    sel.innerHTML = '<option value="">System Default</option>';
+    inputs.forEach(d => {
+      const opt = document.createElement('option');
+      opt.value = d.deviceId;
+      opt.textContent = (d.label || 'Microphone') + (d.label ? '' : ' ('+d.deviceId.slice(0,8)+')');
+      sel.appendChild(opt);
+    });
+    if(micDeviceId && [...sel.options].some(o => o.value === micDeviceId)){
+      sel.value = micDeviceId;
+    }
+    if(wrap) wrap.hidden = false;
+  }catch(e){ dbg('enumerateDevices error: ' + e); }
+}
+
+function initAudioDevices(){
+  if(!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+  enumerateAudioDevices();
+}
+
+async function startWebSpeechMic(){
+  if(!webSpeechSupported()){ toast('Web Speech API not supported'); return; }
+  // Get audio stream from selected device for VU meter and to set active input
+  const constraints = { audio: {
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: true
+  }};
+  if(micDeviceId) constraints.audio.deviceId = { exact: micDeviceId };
+  let stream;
+  try{
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+    startVUMeter(stream);
+  }catch(e){
+    dbg('getUserMedia failed: ' + e.name + ' ' + e.message);
+    toast('Mic permission/device error: ' + e.message);
+    return;
+  }
+  if(!recog && !initWebSpeech()){
+    toast('Web Speech API not supported in this browser');
+    return;
+  }
+  try{
+    recog.start();
+  }catch(e){
+    toast('Mic error: ' + e.message);
+  }
 }
 
 /* ── Mic watchdog: force-restart if browser silently drops recognition ── */
@@ -416,6 +545,7 @@ function toggleMic(){
   if(micOn){
     if(speechEngine === 'web' && recog){
       try{ recog.stop(); }catch(e){}
+      stopVUMeter();
       micOn = false;
       updateMicButton(false);
     } else {
@@ -423,15 +553,7 @@ function toggleMic(){
     }
   } else {
     if(speechEngine === 'web'){
-      if(!recog && !initWebSpeech()){
-        toast('Web Speech API not supported in this browser');
-        return;
-      }
-      try{
-        recog.start();
-      }catch(e){
-        toast('Mic error: ' + e.message);
-      }
+      startWebSpeechMic();
     } else {
       ws.send(JSON.stringify({action:'start_mic'}));
     }
