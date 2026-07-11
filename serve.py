@@ -329,6 +329,8 @@ def normalize_speech_text(text):
     t = re.sub(r'\bchapters\b', 'chapter', t)
     # Convert spoken number-word sequences to digits (e.g. "twenty three" -> "23")
     t = _replace_number_word_sequences(t)
+    # Remove "and" between chapter/verse digits (e.g. "58 and 11" -> "58 11")
+    t = re.sub(r'(\d)\s+and\s+(\d)', r'\1 \2', t)
     return t
 
 # ─── SQLite helpers ──────────────────────────────────────────────────────────
@@ -874,6 +876,7 @@ BOOK_ALIASES = {
     "eccl": "Ecclesiastes", "ecc": "Ecclesiastes", "ec": "Ecclesiastes",
     "sol": "Song of Solomon", "song": "Song of Solomon", "sos": "Song of Solomon", "ss": "Song of Solomon",
     "isa": "Isaiah", "is": "Isaiah",
+    "i said": "Isaiah", "i say": "Isaiah",
     "jer": "Jeremiah", "je": "Jeremiah",
     "lam": "Lamentations", "la": "Lamentations",
     "ezek": "Ezekiel", "eze": "Ezekiel", "ez": "Ezekiel",
