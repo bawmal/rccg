@@ -324,13 +324,13 @@ def normalize_speech_text(text):
     # chapter and verse numbers don't combine across the boundary.
     # NOTE: keep the word 'chapter' so cross-utterance context can distinguish
     # 'chapter 5' from a bare number. detect_verse_ref strips it later.
-    t = re.sub(r'\bverse\s+', ':', t)
-    t = re.sub(r'\bverses?\s+', ':', t)
     # Common mishearings in loud halls: 'versus' -> 'verse', 'chapters' -> 'chapter'
     t = re.sub(r'\bversus\b', 'verse', t)
     t = re.sub(r'\bchapters\b', 'chapter', t)
-    # Convert spoken number-word sequences to digits (e.g. "twenty three" -> "23")
+    # Convert spoken number-word sequences to digits BEFORE the verse marker
+    # becomes ':' so "verse five" -> "verse 5" -> ":5" (colon must survive)
     t = _replace_number_word_sequences(t)
+    t = re.sub(r'\bverses?\s+', ':', t)
     # Remove "and" between chapter/verse digits (e.g. "58 and 11" -> "58 11")
     t = re.sub(r'(\d)\s+and\s+(\d)', r'\1 \2', t)
     return t
@@ -713,11 +713,13 @@ async def handle_client(ws):
                             m_ch = re.match(r'^(?:chapter\s+)?(\d+)$', norm)
                             if m_ch and not last_chapter_context:
                                 _add_cand(f"{last_book_context} {m_ch.group(1)}:1")
-                            # "verse N" only (normalized to ':N')
-                            if last_chapter_context:
-                                m_vs = re.match(r'^:\s*(\d+)$', norm)
-                                if m_vs:
-                                    _add_cand(f"{last_book_context} {last_chapter_context}:{m_vs.group(1)}")
+                            # "verse N" anywhere in the utterance (normalized to ':N') —
+                            # handles jumps like "now look at verse 5" after Genesis 1:1.
+                            # Skipped when the utterance already contains a full "ch:vs" pair.
+                            if last_chapter_context and not re.search(r'\d\s*:\s*\d', norm):
+                                vs_all = re.findall(r'(?:^|[^\d]):\s*(\d+)', norm)
+                                if vs_all:
+                                    _add_cand(f"{last_book_context} {last_chapter_context}:{vs_all[-1]}")
                         # Cross-utterance: bare "N:M" or "N M" prepended with last book
                         if last_book_context:
                             if re.match(r'^\d+\s*:\s*\d+', norm):

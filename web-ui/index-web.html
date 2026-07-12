@@ -634,7 +634,10 @@ function connect(){
       const hasVerseOnScreen = qIdx >= 0;
       const cooldown = (m.source === 'quote') ? COOLDOWN_QUOTE_MS : COOLDOWN_DIRECT_MS;
       const elapsed = Date.now() - lastDisplayAt;
-      if(!isAuto || !hasVerseOnScreen || elapsed >= cooldown){
+      // Same-chapter jumps (e.g. Genesis 1:1 -> "verse 5") are intentional — no cooldown
+      const cur = qIdx >= 0 ? queue[qIdx] : null;
+      const sameChapter = cur && m.book_name === cur.book_name && m.chapter === cur.chapter;
+      if(!isAuto || !hasVerseOnScreen || sameChapter || elapsed >= cooldown){
         displayVerse(m, queue.length - 1);
       } else {
         const wait = Math.ceil((cooldown - elapsed)/1000);
