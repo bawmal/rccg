@@ -359,15 +359,24 @@ def get_translation_id(conn, abbr):
     return row["id"] if row else 1
 
 def _book_name_variants(book):
-    """Generate possible DB name variants for a canonical book name."""
+    """Generate possible DB name variants for a canonical book name.
+    Some translations use Arabic numerals ("1 Corinthians") and others use
+    Roman numerals ("I Corinthians"), so we need both directions."""
     variants = [book]
-    # "1 Samuel" -> "I Samuel", "2 Kings" -> "II Kings", "3 John" -> "III John"
+    # Arabic -> Roman
     if book.startswith("1 "):
         variants.append("I " + book[2:])
     elif book.startswith("2 "):
         variants.append("II " + book[2:])
     elif book.startswith("3 "):
         variants.append("III " + book[2:])
+    # Roman -> Arabic
+    elif book.startswith("I "):
+        variants.append("1 " + book[2:])
+    elif book.startswith("II "):
+        variants.append("2 " + book[2:])
+    elif book.startswith("III "):
+        variants.append("3 " + book[2:])
     # "Revelation" -> "Revelation of John"
     if book == "Revelation":
         variants.append("Revelation of John")
