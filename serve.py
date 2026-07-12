@@ -321,7 +321,8 @@ def normalize_speech_text(text):
     t = re.sub(r'\brev\b', 'revelation', t)
     # Convert spoken reference markers to punctuation before number parsing so
     # chapter and verse numbers don't combine across the boundary.
-    t = re.sub(r'\bchapter\s+', '', t)
+    # NOTE: keep the word 'chapter' so cross-utterance context can distinguish
+    # 'chapter 5' from a bare number. detect_verse_ref strips it later.
     t = re.sub(r'\bverse\s+', ':', t)
     t = re.sub(r'\bverses?\s+', ':', t)
     # Common mishearings in loud halls: 'versus' -> 'verse', 'chapters' -> 'chapter'
@@ -678,21 +679,21 @@ async def handle_client(ws):
                         norm = normalize_speech_text(alt).strip()
                         # Cross-utterance: chapter/verse numbers with book context
                         if last_book_context:
-                            # "chapter N verse M" -> "book N:M" (normalize strips chapter/verse)
-                            m = re.match(r'^(\d+)\s+(\d+)$', norm)
+                            # "chapter N verse M" -> "book N:M" (verse marker becomes ':')
+                            m = re.match(r'^(?:chapter\s+)?(\d+)\s+(\d+)$', norm)
                             if m:
                                 candidate_strings.add(f"{last_book_context} {m.group(1)}:{m.group(2)}")
-                            # "chapter:N verse M" or "1:5" -> "book 1:5"
-                            m_colon = re.match(r'^(\d+)\s*:\s*(\d+)$', norm)
+                            # "chapter N verse M" / "chapter:N verse M" / "1:5" -> "book 1:5"
+                            m_colon = re.match(r'^(?:chapter\s+)?(\d+)\s*:\s*(\d+)$', norm)
                             if m_colon:
                                 candidate_strings.add(f"{last_book_context} {m_colon.group(1)}:{m_colon.group(2)}")
-                            # "chapter N" only (normalized to single number)
-                            m_ch = re.match(r'^(\d+)$', norm)
+                            # "chapter N" only or bare number
+                            m_ch = re.match(r'^(?:chapter\s+)?(\d+)$', norm)
                             if m_ch and not last_chapter_context:
                                 candidate_strings.add(f"{last_book_context} {m_ch.group(1)}:1")
                             # "verse N" only (normalized to ':N')
                             if last_chapter_context:
-                                m_vs = re.match(r'^:(\d+)$', norm)
+                                m_vs = re.match(r'^:\s*(\d+)$', norm)
                                 if m_vs:
                                     candidate_strings.add(f"{last_book_context} {last_chapter_context}:{m_vs.group(1)}")
                         # Cross-utterance: bare "N:M" or "N M" prepended with last book
@@ -718,32 +719,51 @@ async def handle_client(ws):
                                 break
 
                     # Update context memory from the original transcript (not just candidates)
+                    BOOK_WORDS = r'(?:[123]\s+)?(?:philippians|ephesians|colossians|galatians|corinthians|thessalonians|thess|timothy|hebrews|romans|genesis|exodus|leviticus|numbers|deuteronomy|joshua|judges|ruth|samuel|kings|chronicles|ezra|nehemiah|esther|job|psalms|psalm|proverbs|ecclesiastes|isaiah|jeremiah|lamentations|ezekiel|daniel|hosea|joel|amos|obadiah|jonah|micah|nahum|habakkuk|zephaniah|haggai|zechariah|malachi|matthew|mark|luke|john|acts|revelation|titus|philemon|james|peter|jude)'
                     for alt in alternatives[:3]:
                         norm = normalize_speech_text(alt).strip()
                         # Book + chapter + verse
-                        bk_match = re.search(r'\b([a-z]+(?:\s[a-z]+)?)\s+(\d+)[:\s](\d+)', norm)
+                        bk_match = re.search(r'\b((?:[123]\s+)?[a-z]+(?:\s[a-z]+)?)\s+(\d+)[:\s](\d+)', norm)
                         if bk_match:
                             candidate_book = resolve_book_name(bk_match.group(1))
                             if candidate_book:
                                 last_book_context = candidate_book
                                 last_chapter_context = int(bk_match.group(2))
                                 break
-                        # Book only (e.g. "the book of Joshua")
-                        bk_only = re.search(r'\b(philippians|ephesians|colossians|galatians|corinthians|thessalonians|timothy|hebrews|romans|genesis|exodus|leviticus|numbers|deuteronomy|joshua|judges|samuel|kings|chronicles|nehemiah|esther|psalms|proverbs|ecclesiastes|isaiah|jeremiah|ezekiel|daniel|hosea|matthew|mark|luke|john|acts|revelation|james|peter|jude)\b', norm)
+                        # Book + chapter only (e.g. "John 5" or "John chapter 5")
+                        bk_ch = re.search(r'\b(' + BOOK_WORDS + r')\s+(?:chapter\s+)?(\d+)\s*$', norm)
+                        if bk_ch:
+                            candidate_book = resolve_book_name(bk_ch.group(1))
+                            if candidate_book:
+                                last_book_context = candidate_book
+                                last_chapter_context = int(bk_ch.group(2))
+                                print(f"[SPEECH] 📑 Book+chapter context: {last_book_context} {last_chapter_context}")
+                                break
+                        # Book only (e.g. "the book of Joshua", "1 Thessalonians")
+                        bk_only = re.search(r'\b(' + BOOK_WORDS + r')\b', norm)
                         if bk_only:
                             candidate_book = resolve_book_name(bk_only.group(1))
                             if candidate_book:
+                                if candidate_book != last_book_context:
+                                    # New book spoken — reset stale chapter context
+                                    last_chapter_context = None
                                 last_book_context = candidate_book
                                 print(f"[SPEECH] 📖 Book context set: {last_book_context}")
                                 break
-                        # Chapter only (e.g. "chapter 1" normalized to "1")
+                        # Explicit "chapter N" ALWAYS updates chapter context (even if stale)
+                        ch_explicit = re.search(r'\bchapter\s+(\d+)\b', norm)
+                        if ch_explicit and last_book_context:
+                            last_chapter_context = int(ch_explicit.group(1))
+                            print(f"[SPEECH] 📑 Chapter context set: {last_book_context} {last_chapter_context}")
+                            break
+                        # Bare number sets chapter only when none is known yet
                         ch_only = re.match(r'^(\d+)$', norm)
                         if ch_only and last_book_context and not last_chapter_context:
                             last_chapter_context = int(ch_only.group(1))
                             print(f"[SPEECH] 📑 Chapter context set: {last_book_context} {last_chapter_context}")
                             break
                         # Verse only (e.g. "verse 5" normalized to ":5")
-                        vs_only = re.match(r'^:(\d+)$', norm)
+                        vs_only = re.match(r'^:\s*(\d+)$', norm)
                         if vs_only and last_book_context and last_chapter_context:
                             print(f"[SPEECH] 📜 Verse context: {last_book_context} {last_chapter_context}:{vs_only.group(1)}")
                             break
@@ -905,6 +925,7 @@ BOOK_ALIASES = {
     "phil": "Philippians", "php": "Philippians",
     "col": "Colossians", "co": "Colossians",
     "1thess": "1 Thessalonians", "1th": "1 Thessalonians", "2thess": "2 Thessalonians", "2th": "2 Thessalonians",
+    "thess": "1 Thessalonians", "thessalonians": "1 Thessalonians",
     "1tim": "1 Timothy", "1ti": "1 Timothy", "2tim": "2 Timothy", "2ti": "2 Timothy",
     "tit": "Titus", "ti": "Titus",
     "phm": "Philemon", "philem": "Philemon",
