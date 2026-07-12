@@ -324,9 +324,11 @@ def normalize_speech_text(text):
     # chapter and verse numbers don't combine across the boundary.
     # NOTE: keep the word 'chapter' so cross-utterance context can distinguish
     # 'chapter 5' from a bare number. detect_verse_ref strips it later.
-    # Common mishearings in loud halls: 'versus' -> 'verse', 'chapters' -> 'chapter'
+    # Common mishearings in loud halls: 'versus' -> 'verse', 'chapters' -> 'chapter',
+    # 'bus'/'buzz'/'vs' before a number -> 'verse' (Web Speech mishears 'verse')
     t = re.sub(r'\bversus\b', 'verse', t)
     t = re.sub(r'\bchapters\b', 'chapter', t)
+    t = re.sub(r'\b(?:bus|buzz|vs|vers)\b(?=\s+\d)', 'verse', t)
     # Convert spoken number-word sequences to digits BEFORE the verse marker
     # becomes ':' so "verse five" -> "verse 5" -> ":5" (colon must survive)
     t = _replace_number_word_sequences(t)
@@ -594,7 +596,17 @@ class Handler(SimpleHTTPRequestHandler):
         pass  # silence HTTP logs
 
 def run_http():
-    srv = HTTPServer(("0.0.0.0", HTTP_PORT), Handler)
+    HTTPServer.allow_reuse_address = True
+    for attempt in range(10):
+        try:
+            srv = HTTPServer(("0.0.0.0", HTTP_PORT), Handler)
+            break
+        except OSError as e:
+            print(f"[HTTP] bind failed ({e}), retrying in 1s ({attempt+1}/10)")
+            time.sleep(1)
+    else:
+        print(f"[HTTP] could not bind port {HTTP_PORT}, giving up")
+        return
     srv.serve_forever()
 
 # ─── WebSocket server ────────────────────────────────────────────────────────
@@ -614,6 +626,7 @@ async def handle_client(ws):
     broadcast_clients.add(ws)
     last_book_context = None    # book name carried across utterance boundaries
     last_chapter_context = None # chapter number carried across utterance boundaries
+    last_verse_context = None   # verse number of the last displayed verse
     last_detected_ref = None    # suppress duplicate auto-display spam
     conn = get_db()
     print(f"[WS] client connected ({len(broadcast_clients)} total)")
@@ -655,6 +668,10 @@ async def handle_client(ws):
                         v["source"]     = "manual"
                         v["confidence"] = 1.0
                         await broadcast(json.dumps(v))
+                        last_book_context = v["book_name"]
+                        last_chapter_context = v["chapter"]
+                        last_verse_context = v["verse"]
+                        last_detected_ref = v["reference"]
                     else:
                         print(f"[WS] verse not found: {book} {ch}:{vs}")
 
@@ -684,6 +701,26 @@ async def handle_client(ws):
                     print(f"[SPEECH] {'Final' if final else 'Interim'}: {text}" +
                           (f" (+{len(alternatives)-1} alts)" if len(alternatives) > 1 else ""))
                     await broadcast(json.dumps({"type": "transcription", "text": text, "final": final}))
+
+                    # Spoken navigation: "next verse" / "previous verse"
+                    # ('bus' is a common Web Speech mishearing of 'verse')
+                    nav = re.search(r'\b(next|previous|prev)\s+(?:verse|bus|vs)\b',
+                                    text.lower())
+                    if nav and final and last_book_context and last_chapter_context and last_verse_context:
+                        step = 1 if nav.group(1) == 'next' else -1
+                        target = last_verse_context + step
+                        if target >= 1:
+                            v = lookup_verse(conn, last_book_context, last_chapter_context,
+                                             target, active_translation)
+                            if v:
+                                v["type"]       = "verse_detected"
+                                v["source"]     = "manual"   # navigation is intentional — bypass cooldown
+                                v["confidence"] = 1.0
+                                print(f"[SPEECH] \u23e9 Spoken nav: {v['reference']}")
+                                await broadcast(json.dumps(v))
+                                last_verse_context = target
+                                last_detected_ref = v["reference"]
+                        continue
 
                     # Build an ORDERED list of candidate strings. The primary
                     # transcript (alternatives[0]) is tried before lower-ranked
@@ -804,6 +841,9 @@ async def handle_client(ws):
                             print(f"[SPEECH] ✅ Verse: {detected_ref['reference']}")
                             await broadcast(json.dumps(detected_ref))
                             last_detected_ref = ref_key
+                            last_book_context = detected_ref["book_name"]
+                            last_chapter_context = detected_ref["chapter"]
+                            last_verse_context = detected_ref["verse"]
                     else:
                         # Quote matching across all alternatives if no direct ref found
                         best_results = None
@@ -846,6 +886,9 @@ async def handle_client(ws):
                                     print(f"[SPEECH] ✅ Auto-display ({top['score']*100:.0f}%): {top['reference']}")
                                     await broadcast(json.dumps(top))
                                     last_detected_ref = ref_key
+                                    last_book_context = top["book_name"]
+                                    last_chapter_context = top["chapter"]
+                                    last_verse_context = top["verse"]
                             elif top["score"] >= 0.15:
                                 print(f"[SPEECH] 📝 Candidates ({len(best_results)}): top={top['score']*100:.0f}%")
                                 await broadcast(json.dumps({"type": "candidates", "candidates": best_results}))
