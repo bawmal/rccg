@@ -154,7 +154,6 @@ aside{background:var(--surface);border-left:1px solid var(--border);display:flex
   </div>
   <div class="sp"></div>
   <button id="mic-btn" onclick="toggleMic()" style="gap:6px">&#x1F3A4; Start Mic</button>
-  <button id="hold-btn" onclick="toggleHold()" style="gap:4px">&#x1F512; Hold</button>
   <button id="queue-next-btn" onclick="nextInQueue()" disabled>Next Verse</button>
   <button onclick="clearDisplay()">Clear</button>
   <button id="fsbtn" class="primary" onclick="openFS()" disabled>&#x26F6; Fullscreen</button>
@@ -262,7 +261,9 @@ let recog=null;
 let micWatchdog=null;
 let micDeviceId='';
 let audioCtx=null, analyser=null, vuStream=null, vuRaf=null, vuNode=null;
-let holdMode=false;
+let lastDisplayAt=0;               // when the current verse was projected
+const COOLDOWN_DIRECT_MS=10000;    // explicit refs can switch after 10s
+const COOLDOWN_QUOTE_MS=30000;     // quote/semantic matches must wait 30s
 
 /* ── Engine selection ── */
 function isTauri(){
@@ -626,13 +627,18 @@ function connect(){
     else if (m.type === 'verse_detected') {
       dbg('verse_detected: ' + m.reference + ' source:' + (m.source||'detected') + ' trans:' + m.translation);
       addToQueue(m);
-      // Manual lookups / selected candidates always display. Speech detections
-      // (direct or quote) obey Hold mode so preaching doesn't yank the screen.
+      // Manual lookups / selected candidates always display. Auto detections
+      // respect a minimum display time so the screen isn't yanked mid-reading:
+      // explicit references switch after a short cooldown, quote matches wait longer.
       const isAuto = (m.source === 'direct' || m.source === 'quote' || !m.source);
-      if(!isAuto || !holdMode){
+      const hasVerseOnScreen = qIdx >= 0;
+      const cooldown = (m.source === 'quote') ? COOLDOWN_QUOTE_MS : COOLDOWN_DIRECT_MS;
+      const elapsed = Date.now() - lastDisplayAt;
+      if(!isAuto || !hasVerseOnScreen || elapsed >= cooldown){
         displayVerse(m, queue.length - 1);
       } else {
-        toast('Held: ' + m.reference + ' (click Next or the card to project)');
+        const wait = Math.ceil((cooldown - elapsed)/1000);
+        toast('Queued: ' + m.reference + ' (screen held ' + wait + 's \u2014 click card or Next to project now)');
       }
       hideCands();
       updateQueueNextButton();
@@ -687,6 +693,7 @@ function buildTransSel(list){
 function displayVerse(v, idx){
   dbg('displayVerse: '+v.reference+' trans:'+v.translation);
   qIdx=idx;
+  lastDisplayAt=Date.now();
   document.getElementById('idle-msg').style.display='none';
   const card=document.getElementById('proj-card');
   card.style.display='flex';
@@ -738,18 +745,7 @@ function fsAdjacentVerse(dir){
   adjacentVerse(dir);
 }
 
-/* ── Hold / Next control ── */
-function toggleHold(){
-  holdMode = !holdMode;
-  const btn = document.getElementById('hold-btn');
-  if(btn){
-    btn.textContent = holdMode ? '🔓 Unlock' : '🔒 Hold';
-    btn.classList.toggle('primary', holdMode);
-  }
-  dbg('Hold mode: ' + (holdMode?'ON':'OFF'));
-  toast(holdMode ? 'Hold: new auto-detections will not project' : 'Hold: off');
-}
-
+/* ── Next control ── */
 function nextInQueue(){
   if(queue.length === 0) return;
   const idx = queue.length - 1;
@@ -793,13 +789,14 @@ function addToQueue(v){
   const idx=queue.length-1;
   const conf=Math.round((v.confidence||1)*100);
   const sc=v.source==='direct'?'direct':v.source==='manual'?'manual':'semantic';
+  const ts=new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
   const d=document.createElement('div');
   d.className='det-card';
   d.innerHTML='<div class="det-ref">'+esc(v.reference)
     +'<span class="badge '+sc+'">'+(v.source||'detected')+'</span></div>'
     +'<div class="det-txt">'+esc(v.text)+'</div>'
     +'<div class="det-meta"><span class="conf">'+conf+'% match</span>'
-    +'<span style="color:var(--muted2)">'+v.translation+'</span></div>';
+    +'<span style="color:var(--muted2)">'+v.translation+' \u00b7 '+ts+'</span></div>';
   d.onclick=()=>displayVerse(v,idx);
   list.appendChild(d);
   list.scrollTop=list.scrollHeight;

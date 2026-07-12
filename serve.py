@@ -442,6 +442,9 @@ def _extract_book_names(text):
             t = t.replace(canon.lower(), '')  # avoid double counting
     return found
 
+_QUOTE_CACHE = {}
+_QUOTE_CACHE_MAX = 200
+
 def search_quote(conn, text, translation, limit=5):
     """
     Phrase-first quote search:
@@ -450,8 +453,12 @@ def search_quote(conn, text, translation, limit=5):
     2. Score fetched candidates by n-gram overlap.
     3. Boost candidates whose book name appears in the query.
     4. Return ranked list so presenter can choose.
+    Results are cached so repeated interim transcripts don't re-run the SQL.
     """
     t = text.lower().strip()
+    cache_key = (t, translation, limit)
+    if cache_key in _QUOTE_CACHE:
+        return _QUOTE_CACHE[cache_key]
     all_words = re.findall(r'[a-z]+', t)
     if not all_words:
         return []
@@ -562,7 +569,11 @@ def search_quote(conn, text, translation, limit=5):
         print(f"[SEARCH] '{t[:60]}' → {len(deduped)} results, top: {deduped[0]['reference']} ({deduped[0]['score']})")
     else:
         print(f"[SEARCH] '{t[:60]}' → no results")
-    return deduped[:limit]
+    out = deduped[:limit]
+    if len(_QUOTE_CACHE) >= _QUOTE_CACHE_MAX:
+        _QUOTE_CACHE.pop(next(iter(_QUOTE_CACHE)))
+    _QUOTE_CACHE[cache_key] = out
+    return out
 
 # ─── HTTP server ─────────────────────────────────────────────────────────────
 
