@@ -6,6 +6,7 @@ Run:  python3 serve.py
 Open:  http://localhost:8080
 """
 import asyncio, json, os, re, signal, sqlite3, subprocess, sys, threading, socket, queue, time
+import difflib
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 
 try:
@@ -954,6 +955,71 @@ def resolve_book_name(raw):
             return canon
     return None
 
+# Common mishearings of book names from accents/diction (browser speech API)
+BOOK_MISHEARINGS = {
+    "some": "Psalms", "sum": "Psalms", "sums": "Psalms", "palms": "Psalms",
+    "psalm": "Psalms", "salm": "Psalms", "sam": "Psalms", "song": "Psalms",
+    "solms": "Psalms", "psalms": "Psalms",
+    "jean": "John", "june": "John", "joan": "John", "don": "John",
+    "mathew": "Matthew", "matthews": "Matthew", "matthew's": "Matthew",
+    "loop": "Luke", "look": "Luke", "luck": "Luke",
+    "mac": "Mark", "march": "Mark",
+    "romance": "Romans", "roman": "Romans",
+    "jeans": "Genesis", "generous": "Genesis",
+    "exit": "Exodus", "exiles": "Exodus",
+    "proverb": "Proverbs", "proverbial": "Proverbs",
+    "i say": "Isaiah", "i said": "Isaiah", "a zaya": "Isaiah", "isiah": "Isaiah",
+    "jerry maya": "Jeremiah", "jeremy": "Jeremiah",
+    "daniels": "Daniel", "denial": "Daniel",
+    "osea": "Hosea", "jose": "Hosea", "hose": "Hosea",
+    "reservation": "Revelation", "revelations": "Revelation",
+    "fill": "Philippians", "philippines": "Philippians", "filipinos": "Philippians",
+    "collisions": "Colossians", "galoshes": "Galatians", "glaciers": "Galatians",
+    "if he sins": "Ephesians", "officians": "Ephesians",
+    "acts": "Acts", "axe": "Acts", "ax": "Acts",
+    "jute": "Jude", "dude": "Jude",
+    "aim": "Amos", "famous": "Amos",
+    "jobe": "Job", "jobs": "Job",
+    "ruth's": "Ruth", "root": "Ruth", "roof": "Ruth",
+    "esta": "Esther", "easter": "Esther",
+    "hebrew": "Hebrews", "hebrews'": "Hebrews",
+    "titles": "Titus", "tightest": "Titus",
+    "peters": "1 Peter", "pizza": "1 Peter",
+    "numbers": "Numbers", "number": "Numbers",
+    "do to run a me": "Deuteronomy", "due to run": "Deuteronomy",
+}
+
+_ALL_BOOK_KEYS = None
+def fuzzy_book_name(raw):
+    """Infer a book from a misheard word when chapter+verse context is present.
+    Uses a mishearing dictionary first, then fuzzy string similarity against
+    canonical names and aliases."""
+    global _ALL_BOOK_KEYS
+    key = raw.lower().strip()
+    if not key or key.isdigit():
+        return None
+    # Known mishearing?
+    if key in BOOK_MISHEARINGS:
+        return BOOK_MISHEARINGS[key]
+    # Numbered prefix e.g. "1 pizza" -> try tail against mishearings
+    mnum = re.match(r'^([123])\s+(.+)$', key)
+    if mnum and mnum.group(2) in BOOK_MISHEARINGS:
+        base = BOOK_MISHEARINGS[mnum.group(2)]
+        numbered = f"{mnum.group(1)} {base}"
+        if numbered in CANONICAL_BOOKS:
+            return numbered
+        return base
+    # Fuzzy similarity against canonical names and aliases
+    if _ALL_BOOK_KEYS is None:
+        _ALL_BOOK_KEYS = {c.lower(): c for c in CANONICAL_BOOKS}
+        for alias, canon in BOOK_ALIASES.items():
+            if len(alias) >= 4:  # short abbreviations fuzzy-match too easily
+                _ALL_BOOK_KEYS.setdefault(alias, canon)
+    matches = difflib.get_close_matches(key, _ALL_BOOK_KEYS.keys(), n=1, cutoff=0.75)
+    if matches:
+        return _ALL_BOOK_KEYS[matches[0]]
+    return None
+
 def detect_verse_ref(text):
     """Detect a Bible verse reference from spoken or typed text."""
     t = normalize_speech_text(text).strip()
@@ -988,6 +1054,20 @@ def detect_verse_ref(text):
         book = resolve_book_name(raw_book)
         if book:
             return book, chapter, verse
+        # Chapter+verse present is a strong signal this IS a reference —
+        # infer the book from mishearings/accents (e.g. "some 23:1" -> Psalms)
+        book = fuzzy_book_name(raw_book)
+        if book:
+            print(f"[DETECT] 🔊 Fuzzy book: '{raw_book}' -> {book}")
+            return book, chapter, verse
+        # Multi-word capture may include leading noise ("and he said some 23:1")
+        # — retry with just the last word before the numbers
+        last_word = raw_book.split()[-1]
+        if last_word != raw_book:
+            book = resolve_book_name(last_word) or fuzzy_book_name(last_word)
+            if book:
+                print(f"[DETECT] 🔊 Fuzzy book (last word): '{last_word}' -> {book}")
+                return book, chapter, verse
 
     # Pattern 4: single-chapter book "Book :Verse" or "Book verse N" (no chapter spoken)
     m4 = re.search(r'((?:[123]\s)?[a-z]+)\s*:(\d+)', t)
