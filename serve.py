@@ -812,14 +812,30 @@ async def handle_client(ws):
                             if not alt_text or len(alt_text) <= 8:
                                 continue
                             results = search_quote(conn, alt_text, active_translation, 5)
+                            # Context boost: the preacher is likely still reading the
+                            # current chapter, so favour verses from it (copy dicts —
+                            # search_quote results are cached and must not be mutated)
+                            if results and last_book_context:
+                                boosted = []
+                                for r in results:
+                                    r = dict(r)
+                                    if r["book_name"] == last_book_context:
+                                        bonus = 0.20 if r["chapter"] == last_chapter_context else 0.10
+                                        r["score"] = round(min(r["score"] + bonus, 1.0), 3)
+                                    boosted.append(r)
+                                boosted.sort(key=lambda r: r["score"], reverse=True)
+                                results = boosted
                             if results and results[0]["score"] > best_score:
                                 best_score = results[0]["score"]
                                 best_results = results
                         if best_results:
                             top = best_results[0]
                             ref_key = top["reference"]
-                            # Lower thresholds for noisy halls
-                            auto_threshold = 0.75 if final else 0.85
+                            # Lower thresholds for noisy halls; reading on within the
+                            # current chapter needs less certainty to auto-display
+                            in_context = (top["book_name"] == last_book_context
+                                          and top["chapter"] == last_chapter_context)
+                            auto_threshold = (0.60 if in_context else 0.75) if final else 0.85
                             if top["score"] >= auto_threshold:
                                 if ref_key == last_detected_ref:
                                     print(f"[SPEECH] ⏭ Already displayed {ref_key}, skipping duplicate")
