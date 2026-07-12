@@ -685,40 +685,50 @@ async def handle_client(ws):
                           (f" (+{len(alternatives)-1} alts)" if len(alternatives) > 1 else ""))
                     await broadcast(json.dumps({"type": "transcription", "text": text, "final": final}))
 
-                    # Build a richer set of candidate strings from the current utterance
-                    candidate_strings = set(alternatives[:3])
+                    # Build an ORDERED list of candidate strings. The primary
+                    # transcript (alternatives[0]) is tried before lower-ranked
+                    # Web Speech alternatives so a garbage alternative can't
+                    # hijack a clean primary (e.g. 'Genesis chapter 5' vs
+                    # alt 'Genesis chapter 2 5' -> wrongly Genesis 2:5).
+                    if len(alternatives) > 1:
+                        print(f"[SPEECH] alts: {alternatives[1:3]}")
+                    candidate_strings = []
+                    def _add_cand(c):
+                        if c and c not in candidate_strings:
+                            candidate_strings.append(c)
                     for alt in alternatives[:3]:
+                        _add_cand(alt)
                         norm = normalize_speech_text(alt).strip()
                         # Cross-utterance: chapter/verse numbers with book context
                         if last_book_context:
                             # "chapter N verse M" -> "book N:M" (verse marker becomes ':')
                             m = re.match(r'^(?:chapter\s+)?(\d+)\s+(\d+)$', norm)
                             if m:
-                                candidate_strings.add(f"{last_book_context} {m.group(1)}:{m.group(2)}")
+                                _add_cand(f"{last_book_context} {m.group(1)}:{m.group(2)}")
                             # "chapter N verse M" / "chapter:N verse M" / "1:5" -> "book 1:5"
                             m_colon = re.match(r'^(?:chapter\s+)?(\d+)\s*:\s*(\d+)$', norm)
                             if m_colon:
-                                candidate_strings.add(f"{last_book_context} {m_colon.group(1)}:{m_colon.group(2)}")
+                                _add_cand(f"{last_book_context} {m_colon.group(1)}:{m_colon.group(2)}")
                             # "chapter N" only or bare number
                             m_ch = re.match(r'^(?:chapter\s+)?(\d+)$', norm)
                             if m_ch and not last_chapter_context:
-                                candidate_strings.add(f"{last_book_context} {m_ch.group(1)}:1")
+                                _add_cand(f"{last_book_context} {m_ch.group(1)}:1")
                             # "verse N" only (normalized to ':N')
                             if last_chapter_context:
                                 m_vs = re.match(r'^:\s*(\d+)$', norm)
                                 if m_vs:
-                                    candidate_strings.add(f"{last_book_context} {last_chapter_context}:{m_vs.group(1)}")
+                                    _add_cand(f"{last_book_context} {last_chapter_context}:{m_vs.group(1)}")
                         # Cross-utterance: bare "N:M" or "N M" prepended with last book
                         if last_book_context:
                             if re.match(r'^\d+\s*:\s*\d+', norm):
-                                candidate_strings.add(f"{last_book_context} {alt}")
+                                _add_cand(f"{last_book_context} {alt}")
                             elif re.match(r'^\d+\s+\d+$', norm):
-                                candidate_strings.add(f"{last_book_context} {alt}")
+                                _add_cand(f"{last_book_context} {alt}")
 
-                    # Try all candidate strings for a direct reference
+                    # Try candidates in priority order (primary transcript first)
                     detected_ref = None
                     detected_source = None
-                    for cand in sorted(candidate_strings, key=len, reverse=True):
+                    for cand in candidate_strings:
                         if not cand or len(cand) < 4:
                             continue
                         ref = detect_verse_ref(cand)
@@ -1038,8 +1048,7 @@ def detect_verse_ref(text):
     t = re.sub(r'\bfirst\b', '1', t)
     t = re.sub(r'\bsecond\b', '2', t)
     t = re.sub(r'\bthird\b', '3', t)
-    # Normalize "chapter X" -> just X, "verse X" -> :X
-    t = re.sub(r'\bchapter\s+', '', t)
+    # Normalize "verse X" -> :X
     t = re.sub(r'\bverse\s+', ':', t)
     # Normalize colon with surrounding spaces — "1 : 1" -> "1:1"
     t = re.sub(r'\s*:\s*', ':', t)
@@ -1048,6 +1057,16 @@ def detect_verse_ref(text):
 
     # Single-chapter books that have no chapter number when spoken
     SINGLE_CHAPTER_BOOKS = {'obadiah', 'philemon', 'jude', '2 john', '3 john', 'ii john', 'iii john'}
+
+    # Pattern 0: explicit "Book chapter N" with NO verse — project verse 1
+    m0 = re.search(r'((?:[123]\s)?[a-z]+(?:\s(?:of\s)?[a-z]+)?)\s+chapter\s+(\d+)(?!\s*[:\d])', t)
+    if m0:
+        book = resolve_book_name(m0.group(1).strip())
+        if book:
+            return book, int(m0.group(2)), 1
+
+    # Strip the chapter keyword now that explicit chapter-only was handled
+    t = re.sub(r'\bchapter\s+', '', t)
 
     # Pattern 1: "Book Chapter:Verse" with space — e.g. "John 3:16", "1 Corinthians 13:4"
     m = re.search(r'((?:[123]\s)?[a-z]+(?:\s(?:of\s)?[a-z]+)?)\s+(\d+):(\d+)', t)
