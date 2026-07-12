@@ -719,7 +719,7 @@ function connect(){
     }
     else if (m.type === 'verse_detected') {
       dbg('verse_detected: ' + m.reference + ' source:' + (m.source||'detected') + ' trans:' + m.translation);
-      addToQueue(m);
+      const idx = addToQueue(m);
       // Manual lookups / selected candidates always display. Auto detections
       // respect a minimum display time so the screen isn't yanked mid-reading:
       // explicit references switch after a short cooldown, quote matches wait longer.
@@ -731,7 +731,7 @@ function connect(){
       const cur = qIdx >= 0 ? queue[qIdx] : null;
       const sameChapter = cur && m.book_name === cur.book_name && m.chapter === cur.chapter;
       if(!isAuto || !hasVerseOnScreen || sameChapter || elapsed >= cooldown){
-        displayVerse(m, queue.length - 1);
+        displayVerse(m, idx >= 0 ? idx : queue.length - 1);
       } else {
         const wait = Math.ceil((cooldown - elapsed)/1000);
         toast('Queued: ' + m.reference + ' (screen held ' + wait + 's \u2014 click card or Next to project now)');
@@ -874,10 +874,11 @@ function filterQueue(){
 
 /* ── Queue ── */
 function addToQueue(v){
-  // Skip duplicate references in the detected queue
-  if(queue.some(q => q.reference === v.reference)){
-    dbg('addToQueue: duplicate ' + v.reference + ' skipped');
-    return;
+  // Keep duplicate references in the detected queue but return existing index
+  const existingIdx = queue.findIndex(q => q.reference === v.reference);
+  if(existingIdx >= 0){
+    dbg('addToQueue: duplicate ' + v.reference + ' at ' + existingIdx);
+    return existingIdx;
   }
   queue.push(v);
   const empty = document.getElementById('det-empty');
@@ -899,6 +900,7 @@ function addToQueue(v){
   list.scrollTop=list.scrollHeight;
   filterQueue();
   updateQueueNextButton();
+  return idx;
 }
 
 function clearQueue(){

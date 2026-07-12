@@ -894,7 +894,7 @@ async def handle_client(ws):
                             # current chapter needs less certainty to auto-display
                             in_context = (top["book_name"] == last_book_context
                                           and top["chapter"] == last_chapter_context)
-                            auto_threshold = (0.60 if in_context else 0.75) if final else 0.85
+                            auto_threshold = (0.52 if in_context else 0.68) if final else 0.80
                             if top["score"] >= auto_threshold:
                                 if ref_key == last_detected_ref:
                                     print(f"[SPEECH] ⏭ Already displayed {ref_key}, skipping duplicate")
@@ -920,6 +920,22 @@ async def handle_client(ws):
                 if results:
                     # Always show candidates so presenter can choose — never auto-display for manual quote search
                     await broadcast(json.dumps({"type": "candidates", "candidates": results}))
+
+            elif action in ("lookup", "select_candidate"):
+                book_name = msg.get("book_name", "")
+                chapter   = int(msg.get("chapter", 0))
+                verse     = int(msg.get("verse", 0))
+                v = lookup_verse(conn, book_name, chapter, verse, active_translation)
+                if v:
+                    v["type"]       = "verse_detected"
+                    v["source"]     = "manual"
+                    v["confidence"] = 1.0
+                    print(f"[LOOKUP] {v['reference']}")
+                    await broadcast(json.dumps(v))
+                    last_book_context = v["book_name"]
+                    last_chapter_context = v["chapter"]
+                    last_verse_context = v["verse"]
+                    last_detected_ref = v["reference"]
 
     except websockets.exceptions.ConnectionClosed:
         pass
