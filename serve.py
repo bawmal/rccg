@@ -703,13 +703,29 @@ async def handle_client(ws):
                     await broadcast(json.dumps({"type": "transcription", "text": text, "final": final}))
 
                     # Spoken navigation: "next verse", "previous verse", "next",
-                    # "back a verse", "forward", etc. Common mishearing: bus->verse.
+                    # "back a verse", "forward", "go back", etc. Common mishearing: bus->verse.
                     # Uses the LAST displayed verse so the preacher can move through
                     # a quoted range like "Heb 4:14-16" by saying "next verse".
-                    nav = re.search(r'\b(go\s+to\s+the\s+)?(next|previous|prev|back|forward)(\s+(?:verse|bus|vs|one|scripture))?\b|\b(back|forward)\s+(?:a\s+)?verse\b',
-                                    text.lower())
+                    # Anchored to avoid matching ordinary words like "back" in "I came back".
+                    text_lower = text.lower().strip()
+                    nav = None
+                    nav_match = re.search(r'^(?:read\s+(?:the\s+)?|the\s+|go\s+to\s+the\s+)?(next|previous|prev)\s+(?:verse|bus|vs|one|scripture)\b', text_lower)
+                    if nav_match:
+                        nav = nav_match.group(1)
+                    else:
+                        nav_match = re.search(r'^(next|previous|prev|back|forward)\b', text_lower)
+                        if nav_match:
+                            nav = nav_match.group(1)
+                        else:
+                            nav_match = re.search(r'^(?:go\s+)?(back|forward)(?:\s+(?:a\s+)?verse)?\b', text_lower)
+                            if nav_match:
+                                nav = nav_match.group(1)
+                            else:
+                                nav_match = re.search(r'\bgo\s+(?:to\s+)?(next|previous|prev|back|forward)\b', text_lower)
+                                if nav_match:
+                                    nav = nav_match.group(1)
                     if nav and final and last_book_context and last_chapter_context and last_verse_context:
-                        direction = nav.group(2) or nav.group(4)
+                        direction = nav
                         step = 1 if direction in ('next', 'forward') else -1
                         target = last_verse_context + step
                         if target >= 1:
