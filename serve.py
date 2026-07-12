@@ -702,12 +702,15 @@ async def handle_client(ws):
                           (f" (+{len(alternatives)-1} alts)" if len(alternatives) > 1 else ""))
                     await broadcast(json.dumps({"type": "transcription", "text": text, "final": final}))
 
-                    # Spoken navigation: "next verse" / "previous verse"
-                    # ('bus' is a common Web Speech mishearing of 'verse')
-                    nav = re.search(r'\b(next|previous|prev)\s+(?:verse|bus|vs)\b',
+                    # Spoken navigation: "next verse", "previous verse", "next",
+                    # "back a verse", "forward", etc. Common mishearing: bus->verse.
+                    # Uses the LAST displayed verse so the preacher can move through
+                    # a quoted range like "Heb 4:14-16" by saying "next verse".
+                    nav = re.search(r'\b(go\s+to\s+the\s+)?(next|previous|prev|back|forward)(\s+(?:verse|bus|vs|one|scripture))?\b|\b(back|forward)\s+(?:a\s+)?verse\b',
                                     text.lower())
                     if nav and final and last_book_context and last_chapter_context and last_verse_context:
-                        step = 1 if nav.group(1) == 'next' else -1
+                        direction = nav.group(2) or nav.group(4)
+                        step = 1 if direction in ('next', 'forward') else -1
                         target = last_verse_context + step
                         if target >= 1:
                             v = lookup_verse(conn, last_book_context, last_chapter_context,
