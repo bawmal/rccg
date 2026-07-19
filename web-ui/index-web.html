@@ -295,6 +295,11 @@ let lastDisplayAt=0;               // when the current verse was projected
 const COOLDOWN_DIRECT_MS=10000;    // explicit refs can switch after 10s
 const COOLDOWN_QUOTE_MS=30000;     // quote/semantic matches must wait 30s
 
+// Web Speech restart throttling to avoid log-spam/no-speech loops
+let webSpeechRestartDelay = 300;
+let webSpeechNoSpeechCount = 0;
+const WEB_SPEECH_MAX_NO_SPEECH_RETRIES = 5;
+
 /* ── Engine selection ── */
 function isTauri(){
   return !!(window.__TAURI__ || window.__TAURI_INTERNALS__);
@@ -309,7 +314,8 @@ function loadEnginePref(){
   if(saved && ['vosk','web'].includes(saved)){
     speechEngine = saved;
   } else {
-    speechEngine = isTauri() ? 'vosk' : 'web';
+    // Default to the backend Vosk engine; Web Speech is only a fallback.
+    speechEngine = 'vosk';
   }
   const sel = document.getElementById('mic-engine');
   if(sel){
@@ -494,6 +500,8 @@ function initAudioDevices(){
 
 async function startWebSpeechMic(){
   if(!webSpeechSupported()){ toast('Web Speech API not supported'); return; }
+  webSpeechRestartDelay = 300;
+  webSpeechNoSpeechCount = 0;
   // Get audio stream from selected device for VU meter and to set active input
   const constraints = { audio: {
     echoCancellation: false,
@@ -556,16 +564,17 @@ function initWebSpeech(){
   };
 
   recog.onend = () => {
-    if(micOn){
-      // Browser stopped recognition — recreate and restart to avoid stale instance
+    if(micOn && speechEngine === 'web'){
+      // Browser stopped recognition — recreate and restart to avoid stale instance.
+      // Delay is throttled so a run of no-speech errors doesn't flood the logs.
       setTimeout(() => {
-        if(micOn){
-          dbg('⟳ Web Speech ended unexpectedly — restarting...');
+        if(micOn && speechEngine === 'web'){
+          dbg('⟳ Web Speech ended unexpectedly — restarting in ' + webSpeechRestartDelay + 'ms');
           recog = null;
           initWebSpeech();
           try{ recog.start(); }catch(e){ dbg('restart failed: '+e); }
         }
-      }, 300);
+      }, webSpeechRestartDelay);
     } else {
       updateMicButton(false);
       clearMicWatchdog();
@@ -581,12 +590,18 @@ function initWebSpeech(){
       clearMicWatchdog();
       toast('Mic permission denied');
     } else if(e.error === 'no-speech' || e.error === 'audio-capture' || e.error === 'network' || e.error === 'aborted'){
-      // Transient — browser will fire onend, which restarts automatically
-      dbg('Web Speech transient error: ' + e.error + ' — will restart');
+      webSpeechNoSpeechCount++;
+      webSpeechRestartDelay = Math.min(webSpeechRestartDelay * 2, 8000);
+      dbg('Web Speech transient error: ' + e.error + ' — will restart in ' + webSpeechRestartDelay + 'ms (retry ' + webSpeechNoSpeechCount + ')');
+      if(webSpeechNoSpeechCount >= WEB_SPEECH_MAX_NO_SPEECH_RETRIES && !isTauri()){
+        toast('Web Speech keeps failing — switch to Vosk offline mic');
+      }
     }
   };
 
   recog.onresult = (e) => {
+    webSpeechRestartDelay = 300;
+    webSpeechNoSpeechCount = 0;
     resetMicWatchdog();
     let interim = '', final = '';
     // Collect all alternatives for final results to improve noisy-room accuracy
