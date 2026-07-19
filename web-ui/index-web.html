@@ -287,6 +287,7 @@ aside{background:var(--surface);border-left:1px solid var(--border);display:flex
 let ws, at='KJV', queue=[], qIdx=-1;
 let micOn=false;
 let speechEngine='vosk';
+let voskAvailable=false;
 let recog=null;
 let micWatchdog=null;
 let micDeviceId='';
@@ -593,8 +594,21 @@ function initWebSpeech(){
       webSpeechNoSpeechCount++;
       webSpeechRestartDelay = Math.min(webSpeechRestartDelay * 2, 8000);
       dbg('Web Speech transient error: ' + e.error + ' — will restart in ' + webSpeechRestartDelay + 'ms (retry ' + webSpeechNoSpeechCount + ')');
-      if(webSpeechNoSpeechCount >= WEB_SPEECH_MAX_NO_SPEECH_RETRIES && !isTauri()){
-        toast('Web Speech keeps failing — switch to Vosk offline mic');
+      if(webSpeechNoSpeechCount === 2){
+        toast('No speech detected — check default microphone / mic distance');
+      }
+      // If Web Speech keeps failing and Vosk is available, automatically fall back.
+      if(webSpeechNoSpeechCount >= WEB_SPEECH_MAX_NO_SPEECH_RETRIES && voskAvailable){
+        dbg('Web Speech failing repeatedly — falling back to Vosk offline');
+        toast('Web Speech unreliable — switching to Vosk offline mic');
+        speechEngine = 'vosk';
+        localStorage.setItem('rhema-mic-engine', 'vosk');
+        const sel = document.getElementById('mic-engine');
+        if(sel) sel.value = 'vosk';
+        micOn = false;
+        try{ recog.stop(); }catch(e){}
+        stopVUMeter();
+        ws.send(JSON.stringify({action:'start_mic'}));
       }
     }
   };
@@ -704,6 +718,7 @@ function connect(){
       at = m.translation || 'KJV';
       if (m.translations) buildTransSel(m.translations);
       const voskAvail = m.vosk_available !== false;
+      voskAvailable = voskAvail;
       const sel = document.getElementById('mic-engine');
       if(sel){
         const voskOpt = sel.querySelector('option[value="vosk"]');
