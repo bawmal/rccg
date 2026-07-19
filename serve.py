@@ -1217,6 +1217,7 @@ BOOK_MISHEARINGS = {
     "jerry maya": "Jeremiah", "jeremy": "Jeremiah",
     "daniels": "Daniel", "denial": "Daniel",
     "osea": "Hosea", "jose": "Hosea", "hose": "Hosea",
+    "jewel": "Joel", "jewell": "Joel", "jole": "Joel", "jowell": "Joel",
     "reservation": "Revelation", "revelations": "Revelation",
     "fill": "Philippians", "philippines": "Philippians", "filipinos": "Philippians",
     "collisions": "Colossians", "galoshes": "Galatians", "glaciers": "Galatians",
