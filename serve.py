@@ -38,6 +38,34 @@ vosk_listening = False
 vosk_queue = queue.Queue()
 main_loop = None
 
+# Lightweight performance counters for live monitoring
+perf_stats = {
+    "msg_count": 0,
+    "total_ms": 0.0,
+    "max_ms": 0.0,
+    "slow_count": 0,
+}
+PERF_LOG_INTERVAL = 30  # seconds
+
+async def perf_reporter():
+    """Periodically print WebSocket message processing stats."""
+    while True:
+        await asyncio.sleep(PERF_LOG_INTERVAL)
+        cnt = perf_stats["msg_count"]
+        if cnt:
+            avg = perf_stats["total_ms"] / cnt
+            print(
+                f"[PERF] {PERF_LOG_INTERVAL}s: {cnt} msgs, "
+                f"avg {avg:.1f}ms, max {perf_stats['max_ms']:.1f}ms, "
+                f"slow(>100ms) {perf_stats['slow_count']}"
+            )
+        else:
+            print(f"[PERF] {PERF_LOG_INTERVAL}s: no messages")
+        perf_stats["msg_count"] = 0
+        perf_stats["total_ms"] = 0.0
+        perf_stats["max_ms"] = 0.0
+        perf_stats["slow_count"] = 0
+
 
 def free_ports():
     """Kill any process listening on our HTTP/WebSocket ports before we bind."""
@@ -639,6 +667,12 @@ class Handler(SimpleHTTPRequestHandler):
         super().__init__(*a, directory=WEB_DIR, **kw)
 
     def do_GET(self):
+        if self.path == "/stats":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(perf_stats).encode())
+            return
         if self.path == "/" or self.path == "/index.html":
             self.path = "/index-web.html"
         super().do_GET()
@@ -704,6 +738,7 @@ async def handle_client(ws):
             except:
                 continue
             action = msg.get("action", "")
+            msg_t0 = time.perf_counter()
 
             if action == "set_translation":
                 t = msg.get("translation", "").upper()
@@ -1021,6 +1056,15 @@ async def handle_client(ws):
                 else:
                     print(f"[LOOKUP] adjacent {direction}: no verse found for {book_name} {chapter}:{verse}")
 
+            # Per-message performance metrics
+            elapsed_ms = (time.perf_counter() - msg_t0) * 1000
+            perf_stats["msg_count"] += 1
+            perf_stats["total_ms"] += elapsed_ms
+            perf_stats["max_ms"] = max(perf_stats["max_ms"], elapsed_ms)
+            if elapsed_ms > 100:
+                perf_stats["slow_count"] += 1
+                print(f"[PERF] slow message ({action}) {elapsed_ms:.1f}ms")
+
     except websockets.exceptions.ConnectionClosed:
         pass
     except Exception as e:
@@ -1323,6 +1367,9 @@ async def main():
     # Start Vosk offline speech recognition worker in a background thread
     vosk_thread = threading.Thread(target=vosk_worker, daemon=True)
     vosk_thread.start()
+
+    # Start lightweight performance monitor
+    asyncio.create_task(perf_reporter())
 
     # WebSocket server
     async with websockets.serve(handle_client, "0.0.0.0", WS_PORT, reuse_address=True):
