@@ -26,8 +26,7 @@ except ImportError:
 # When bundled with PyInstaller (onefile), resources are extracted to sys._MEIPASS.
 # When running as a plain script, use the directory of this file.
 _BASE = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
-DB_PATH   = os.path.join(_BASE, "data", "rhema.db")
-MODEL     = os.path.join(_BASE, "models", "ggml-base.en.bin")
+DB_PATH    = os.path.join(_BASE, "data", "rhema.db")
 VOSK_MODEL = os.path.join(_BASE, "models", "vosk-model-en-us-0.22-lgraph")
 WEB_DIR   = os.path.join(_BASE, "web-ui")
 HTTP_PORT = 8080
@@ -312,7 +311,7 @@ def normalize_speech_text(text):
     t = re.sub(r'\bluke\b', 'luke', t)
     t = re.sub(r'\bacts\b', 'acts', t)
     t = re.sub(r'\brom\b', 'romans', t)
-    t = re.sub(r'\b gal\b', ' galatians', t)
+    t = re.sub(r'\bgal\b', 'galatians', t)
     t = re.sub(r'\beph\b', 'ephesians', t)
     t = re.sub(r'\bphil\b', 'philippians', t)
     t = re.sub(r'\bcol\b', 'colossians', t)
@@ -333,6 +332,13 @@ def normalize_speech_text(text):
     # becomes ':' so "verse five" -> "verse 5" -> ":5" (colon must survive)
     t = _replace_number_word_sequences(t)
     t = re.sub(r'\bverses?\s+', ':', t)
+    # Normalize spaces around colons so "1 : 5" becomes "1:5"
+    t = re.sub(r'\s*:\s*', ':', t)
+    # Collapse repeated "verse" markers: "1:1:5" (chapter:verse:verse) -> "1:5"
+    # and "1 1:5" (chapter verse:verse) -> "1:5". This handles a preacher saying a
+    # reference and then jumping to another verse, e.g. "Genesis 1:1 verse 5".
+    t = re.sub(r'(\d+):(\d+):(\d+)', r'\1:\3', t)
+    t = re.sub(r'(\d+)\s+(\d+):(\d+)', r'\1:\3', t)
     # Remove "and" between chapter/verse digits (e.g. "58 and 11" -> "58 11")
     t = re.sub(r'(\d)\s+and\s+(\d)', r'\1 \2', t)
     return t
@@ -418,6 +424,46 @@ def lookup_verse(conn, book, chapter, verse, translation):
     except Exception as e:
         print(f"lookup error: {e}")
     return None
+
+def get_chapter_verse_count(conn, book, chapter, translation):
+    """Return the number of verses in a chapter for a given translation."""
+    tid = get_translation_id(conn, translation)
+    variants = _book_name_variants(book)
+    for bname in variants:
+        row = conn.execute(
+            "SELECT MAX(verse) AS maxv FROM verses WHERE book_name=? AND chapter=? AND translation_id=?",
+            (bname, chapter, tid)
+        ).fetchone()
+        if row and row["maxv"]:
+            return row["maxv"]
+    return None
+
+def get_adjacent_verse(conn, book, chapter, verse, direction, translation):
+    """Return the next/previous valid verse, crossing chapter boundaries.
+    direction: 1 for next, -1 for previous."""
+    if direction not in (1, -1):
+        return None
+
+    # Determine current chapter max verse
+    maxv = get_chapter_verse_count(conn, book, chapter, translation)
+    if not maxv:
+        return None
+
+    target_ch = chapter
+    target_vs = verse + direction
+
+    if target_vs > maxv:
+        target_ch = chapter + 1
+        target_vs = 1
+    elif target_vs < 1:
+        target_ch = chapter - 1
+        if target_ch < 1:
+            return None
+        target_vs = get_chapter_verse_count(conn, book, target_ch, translation)
+        if not target_vs:
+            return None
+
+    return lookup_verse(conn, book, target_ch, target_vs, translation)
 
 STOP_WORDS = {
     'the','a','an','and','or','but','in','on','at','to','for','of','with',
@@ -734,20 +780,19 @@ async def handle_client(ws):
                                 if nav_match:
                                     nav = nav_match.group(1)
                     if nav and final and last_book_context and last_chapter_context and last_verse_context:
-                        direction = nav
-                        step = 1 if direction in ('next', 'forward') else -1
-                        target = last_verse_context + step
-                        if target >= 1:
-                            v = lookup_verse(conn, last_book_context, last_chapter_context,
-                                             target, active_translation)
-                            if v:
-                                v["type"]       = "verse_detected"
-                                v["source"]     = "manual"   # navigation is intentional — bypass cooldown
-                                v["confidence"] = 1.0
-                                print(f"[SPEECH] \u23e9 Spoken nav: {v['reference']}")
-                                await broadcast(json.dumps(v))
-                                last_verse_context = target
-                                last_detected_ref = v["reference"]
+                        step = 1 if nav in ('next', 'forward') else -1
+                        v = get_adjacent_verse(conn, last_book_context, last_chapter_context,
+                                               last_verse_context, step, active_translation)
+                        if v:
+                            v["type"]       = "verse_detected"
+                            v["source"]     = "manual"   # navigation is intentional — bypass cooldown
+                            v["confidence"]  = 1.0
+                            print(f"[SPEECH] \u23e9 Spoken nav: {v['reference']}")
+                            await broadcast(json.dumps(v))
+                            last_book_context    = v["book_name"]
+                            last_chapter_context = v["chapter"]
+                            last_verse_context   = v["verse"]
+                            last_detected_ref    = v["reference"]
                         continue
 
                     # Build an ORDERED list of candidate strings. The primary
@@ -808,17 +853,18 @@ async def handle_client(ws):
                                 break
 
                     # Update context memory from the original transcript (not just candidates)
-                    BOOK_WORDS = r'(?:[123]\s+)?(?:philippians|ephesians|colossians|galatians|corinthians|thessalonians|thess|timothy|hebrews|romans|genesis|exodus|leviticus|numbers|deuteronomy|joshua|judges|ruth|samuel|kings|chronicles|ezra|nehemiah|esther|job|psalms|psalm|proverbs|ecclesiastes|isaiah|jeremiah|lamentations|ezekiel|daniel|hosea|joel|amos|obadiah|jonah|micah|nahum|habakkuk|zephaniah|haggai|zechariah|malachi|matthew|mark|luke|john|acts|revelation|titus|philemon|james|peter|jude)'
+                    # Multi-word books listed before their shorter stems so "song of solomon"
+                    # matches fully rather than just "song".
+                    BOOK_WORDS = r'(?:[123]\s+)?(?:song of solomon|song of songs|philippians|ephesians|colossians|galatians|corinthians|thessalonians|thess|timothy|hebrews|romans|genesis|exodus|leviticus|numbers|deuteronomy|joshua|judges|ruth|samuel|kings|chronicles|ezra|nehemiah|esther|job|psalms|psalm|proverbs|ecclesiastes|isaiah|jeremiah|lamentations|ezekiel|daniel|hosea|joel|amos|obadiah|jonah|micah|nahum|habakkuk|zephaniah|haggai|zechariah|malachi|matthew|mark|luke|john|acts|revelation|titus|philemon|james|peter|jude|song)'
                     for alt in alternatives[:3]:
                         norm = normalize_speech_text(alt).strip()
-                        # Book + chapter + verse
-                        bk_match = re.search(r'\b((?:[123]\s+)?[a-z]+(?:\s[a-z]+)?)\s+(\d+)[:\s](\d+)', norm)
-                        if bk_match:
-                            candidate_book = resolve_book_name(bk_match.group(1))
-                            if candidate_book:
-                                last_book_context = candidate_book
-                                last_chapter_context = int(bk_match.group(2))
-                                break
+                        # Book + chapter + verse — use the same detector as
+                        # direct detection so multi-word books (Song of Solomon)
+                        # and spoken forms like "John chapter 3 verse 16" work.
+                        ref = detect_verse_ref(norm)
+                        if ref:
+                            last_book_context, last_chapter_context, _ = ref
+                            break
                         # Book + chapter only (e.g. "John 5" or "John chapter 5")
                         bk_ch = re.search(r'\b(' + BOOK_WORDS + r')\s+(?:chapter\s+)?(\d+)\s*$', norm)
                         if bk_ch:
@@ -900,10 +946,20 @@ async def handle_client(ws):
                             top = best_results[0]
                             ref_key = top["reference"]
                             # Lower thresholds for noisy halls; reading on within the
-                            # current chapter needs less certainty to auto-display
-                            in_context = (top["book_name"] == last_book_context
-                                          and top["chapter"] == last_chapter_context)
-                            auto_threshold = (0.52 if in_context else 0.68) if final else 0.80
+                            # current chapter needs less certainty to auto-display.
+                            # Distinguish same-chapter, same-book, and different-book
+                            # so adjacent quotes (e.g. Matthew 26:39 after Matthew 26:36)
+                            # display instead of being queued.
+                            same_book = top["book_name"] == last_book_context
+                            same_chapter = same_book and top["chapter"] == last_chapter_context
+                            if same_chapter:
+                                auto_threshold = 0.52
+                            elif same_book:
+                                auto_threshold = 0.55
+                            else:
+                                auto_threshold = 0.68
+                            if not final:
+                                auto_threshold = max(auto_threshold, 0.80)
                             if top["score"] >= auto_threshold:
                                 if ref_key == last_detected_ref:
                                     print(f"[SPEECH] ⏭ Already displayed {ref_key}, skipping duplicate")
@@ -945,6 +1001,25 @@ async def handle_client(ws):
                     last_chapter_context = v["chapter"]
                     last_verse_context = v["verse"]
                     last_detected_ref = v["reference"]
+
+            elif action == "adjacent_verse":
+                book_name = msg.get("book_name", "")
+                chapter   = int(msg.get("chapter", 0))
+                verse     = int(msg.get("verse", 0))
+                direction = int(msg.get("direction", 1))
+                v = get_adjacent_verse(conn, book_name, chapter, verse, direction, active_translation)
+                if v:
+                    v["type"]       = "verse_detected"
+                    v["source"]     = "manual"
+                    v["confidence"] = 1.0
+                    print(f"[LOOKUP] adjacent {direction}: {v['reference']}")
+                    await broadcast(json.dumps(v))
+                    last_book_context = v["book_name"]
+                    last_chapter_context = v["chapter"]
+                    last_verse_context = v["verse"]
+                    last_detected_ref = v["reference"]
+                else:
+                    print(f"[LOOKUP] adjacent {direction}: no verse found for {book_name} {chapter}:{verse}")
 
     except websockets.exceptions.ConnectionClosed:
         pass
@@ -1215,184 +1290,6 @@ def detect_verse_ref(text):
 
     return None
 
-def _is_poor_transcription(text):
-    """Filter out poor quality transcriptions that cause false positives."""
-    text_lower = text.lower().strip()
-    
-    # Skip very short or empty transcriptions
-    if len(text_lower) < 3:
-        return True
-    
-    # Skip if it's mostly music notation - be less aggressive
-    music_count = text_lower.count("♪") + text_lower.count("♫")
-    if music_count > 3:
-        return True
-    
-    # Only filter obvious non-speech content
-    if text_lower.startswith("(") and text_lower.endswith(")"):
-        if "music" in text_lower or "singing" in text_lower:
-            return True
-    
-    return False
-
-def _is_non_bible_content(text):
-    """Check if text is likely not bible content."""
-    text_lower = text.lower().strip()
-    
-    # Only filter obvious non-bible content
-    obvious_non_bible = [
-        "video", "youtube", "subscribe", "like", "share",
-        "camera", "recording", "live stream", "broadcast",
-    ]
-    
-    for indicator in obvious_non_bible:
-        if indicator in text_lower:
-            return True
-    
-    return False
-
-async def whisper_loop():
-    global active_translation
-    if not os.path.exists(MODEL):
-        print(f"[WHISPER] Model not found: {MODEL}")
-        print(f"[WHISPER] Audio transcription disabled. Manual lookup still works.")
-        return
-
-    print("[WHISPER] Starting whisper-stream...")
-    print(f"[WHISPER] Model path: {MODEL}")
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "whisper-stream",
-            "--model", MODEL,
-            "--language", "en",
-            "--step", "3000",     # 3 second chunks for reliability
-            "--length", "5000",   # 5 second windows for balance
-            "--keep", "1000",     # 1 second overlap for continuity
-            "--threads", "2",     # Fewer threads for stability
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        print("[WHISPER] whisper-stream running (PID: {})".format(proc.pid))
-        print("[WHISPER] Waiting for audio...")
-    except Exception as e:
-        print(f"[WHISPER] Failed to start whisper-stream: {e}")
-        print("[WHISPER] Make sure whisper-stream is installed and accessible")
-        return
-
-    conn = get_db()
-    try:
-        audio_buffer = []
-        last_detection = 0
-        
-        async def read_stderr():
-            """Read stderr to monitor whisper status"""
-            while True:
-                line = await proc.stderr.readline()
-                if not line:
-                    break
-                err = line.decode("utf-8", errors="replace").strip()
-                if err and not err.startswith("whisper"):
-                    print(f"[WHISPER-STDERR] {err}")
-        
-        # Start stderr reader in background
-        asyncio.create_task(read_stderr())
-        
-        while True:
-            line = await proc.stdout.readline()
-            if not line:
-                break
-            raw = line.decode("utf-8", errors="replace")
-            cleaned = raw.replace("\x1b[2K", "").replace("\x1b[1G", "").replace("\x1b[0m", "").strip()
-            
-            # Skip control messages and empty lines
-            if not cleaned or cleaned.startswith("[") or cleaned.startswith("whisper") or cleaned.startswith("ggml") or cleaned.startswith("main:"):
-                continue
-            
-            # Add to buffer for context
-            audio_buffer.append(cleaned)
-            if len(audio_buffer) > 5:
-                audio_buffer.pop(0)
-            
-            print(f"[WHISPER] Heard: {cleaned}")
-            
-            # Filter out poor quality transcriptions
-            if _is_poor_transcription(cleaned):
-                print(f"[WHISPER] 🚫 Skipping poor transcription: {cleaned}")
-                continue
-            
-            # Check for verse references in current and buffer
-            ref = detect_verse_ref(cleaned)
-            if not ref:
-                # Check in buffer context (combine last few phrases)
-                combined = " ".join(audio_buffer[-3:])
-                ref = detect_verse_ref(combined)
-            
-            if ref:
-                book, ch, vs = ref
-                v = lookup_verse(conn, book, ch, vs, active_translation)
-                if v:
-                    v["type"]       = "verse_detected"
-                    v["source"]     = "direct"
-                    v["confidence"] = 1.0
-                    print(f"[WHISPER] ✅ Detected: {v['reference']}")
-                    await broadcast(json.dumps(v))
-                    last_detection = asyncio.get_event_loop().time()
-                else:
-                    print(f"[WHISPER] ❌ Reference found but not in DB: {book} {ch}:{vs}")
-            
-            # Check for scripture quotes (partial passages) - more sensitive
-            if cleaned and len(cleaned.strip()) > 8:  # Check shorter phrases too
-                # Skip if it contains obvious non-bible indicators
-                if _is_non_bible_content(cleaned):
-                    print(f"[WHISPER] 🚫 Skipping non-bible content: {cleaned}")
-                    continue
-                    
-                # Use buffer for better context
-                quote_text = " ".join(audio_buffer[-2:]) if len(audio_buffer) > 1 else cleaned
-                results = search_quote(conn, quote_text, active_translation, 5)
-                if results:
-                    top = results[0]
-                    # Lower threshold for auto-display to be more sensitive
-                    if top.score >= 0.4:
-                        # Auto-display medium confidence matches
-                        v = {
-                            "type": "verse_detected",
-                            "source": "quote",
-                            "confidence": top.score,
-                            "book_name": top.verse.book_name,
-                            "chapter": top.verse.chapter,
-                            "verse": top.verse.verse,
-                            "text": top.verse.text,
-                            "reference": top.verse.reference(),
-                            "translation": active_translation,
-                        }
-                        print(f"[WHISPER] ✅ Quote match ({top.score*100:.0f}%): {v['reference']}")
-                        await broadcast(json.dumps(v))
-                    elif top.score >= 0.2:
-                        # Show candidates for lower confidence
-                        candidates = [{"reference": r.verse.reference(), "translation": active_translation,
-                                     "book_name": r.verse.book_name, "chapter": r.verse.chapter,
-                                     "verse": r.verse.verse, "text": r.verse.text, "score": r.score} 
-                                    for r in results]
-                        await broadcast(json.dumps({"type": "candidates", "candidates": candidates}))
-                        print(f"[WHISPER] 📝 Quote candidates: {len(candidates)} matches")
-            
-            # Send live transcription updates to show it's working
-            if cleaned and len(cleaned) > 3:
-                await broadcast(json.dumps({
-                    "type": "transcription",
-                    "text": cleaned
-                }))
-                
-    except Exception as e:
-        print(f"[WHISPER] error: {e}")
-    finally:
-        conn.close()
-        if 'proc' in locals():
-            proc.terminate()
-            await proc.wait()
-            print("[WHISPER] whisper-stream stopped")
-
 # ─── Main ────────────────────────────────────────────────────────────────────
 
 async def main():
@@ -1405,7 +1302,8 @@ async def main():
     print("  RCCG COM Bible-lite — Local Web Server")
     print("=" * 56)
     print(f"  Database: {DB_PATH}")
-    print(f"  Model:    {MODEL} {'(Whisper model found)' if os.path.exists(MODEL) else '(Whisper model not bundled — using Vosk offline speech recognition)'}")
+    vosk_available = os.path.exists(VOSK_MODEL)
+    print(f"  Speech:   Vosk offline recognition {'(model found)' if vosk_available else '(model missing — transcription disabled; manual lookup still works)'}")
     print(f"  Web UI:   http://localhost:{HTTP_PORT}")
     print(f"  WS:       ws://localhost:{WS_PORT}")
     print("=" * 56)

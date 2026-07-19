@@ -272,8 +272,8 @@ aside{background:var(--surface);border-left:1px solid var(--border);display:flex
   <div id="fs-text"></div>
   <div id="fs-trans"></div>
   <div id="fs-controls">
-    <button onclick="event.stopPropagation(); fsAdjacentVerse(-1)" id="fs-prev" disabled>&#8592; Prev Verse</button>
-    <button onclick="event.stopPropagation(); fsAdjacentVerse(1)" id="fs-next" disabled>Next Verse &#8594;</button>
+    <button onclick="fsAdjacentVerse(event, -1)" id="fs-prev" disabled>&#8592; Prev Verse</button>
+    <button onclick="fsAdjacentVerse(event, 1)" id="fs-next" disabled>Next Verse &#8594;</button>
   </div>
   <div id="fs-hint">Click to close &nbsp;&#183;&nbsp; Arrow keys = navigate</div>
 </div>
@@ -827,16 +827,13 @@ function adjacentVerse(dir){
   dbg('adjacentVerse('+dir+') qIdx='+qIdx);
   if(qIdx<0||!queue[qIdx]){dbg('No current verse'); return;}
   const v=queue[qIdx];
-  let nextCh=v.chapter, nextVs=v.verse+dir;
-  if(nextVs<1){nextCh--; nextVs=150;}
-  if(nextCh<1){dbg('Cannot go before chapter 1'); return;}
-  console.log('AdjacentVerse request', v.book_name, nextCh, nextVs);
+  console.log('AdjacentVerse request', v.book_name, v.chapter, v.verse, dir);
   if(ws&&ws.readyState===1)
-    ws.send(JSON.stringify({action:'lookup',book_name:v.book_name,chapter:nextCh,verse:nextVs}));
+    ws.send(JSON.stringify({action:'adjacent_verse',book_name:v.book_name,chapter:v.chapter,verse:v.verse,direction:dir}));
 }
 
-function fsAdjacentVerse(dir){
-  event.stopPropagation();
+function fsAdjacentVerse(ev, dir){
+  ev.stopPropagation();
   console.log('Fullscreen button clicked', dir);
   adjacentVerse(dir);
 }
@@ -1077,8 +1074,8 @@ document.addEventListener('keydown',e=>{
       ?document.getElementById('fsoverlay').requestFullscreen?.()
       :document.exitFullscreen?.();
   }
-  if(ov&&e.key==='ArrowRight'){navVerse(1);}
-  if(ov&&e.key==='ArrowLeft'){navVerse(-1);}
+  if(ov&&e.key==='ArrowRight'){adjacentVerse(1);}
+  if(ov&&e.key==='ArrowLeft'){adjacentVerse(-1);}
 });
 
 /* ── Helpers ── */
